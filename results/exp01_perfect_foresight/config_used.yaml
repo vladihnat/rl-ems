@@ -1,0 +1,54 @@
+experiment:
+  name: exp01_perfect_foresight
+  seed: 42
+
+time:
+  delta_t_min: 5
+  horizon_h: 6
+  # derived: horizon_steps = (horizon_h * 60) / delta_t_min = 72
+
+data:
+  pv_csv: "data/Pyrano1w_clean.csv"
+  pv_column: "Global30_kW"
+  # Columns used from the CSV: hour_sin, hour_cos, doy_sin, doy_cos, Global30_kW
+
+battery:
+  capacity_kwh: 24.0           # 30kWh * 0.8 usable
+  soc_min: 0.2
+  soc_max: 0.9
+  max_charge_kw: 7.0
+  max_discharge_kw: 7.0
+  efficiency_charge: 0.9
+  efficiency_discharge: 0.9
+  init_soc: 0.5
+  cost_cycle: 0.02
+
+grid:
+  max_import_kw: 17.0          # limited by inverter Pmax
+  max_export_kw: 17.0
+  price_import: 0.15           # EUR/kWh -- fixed for exp01
+  price_export: 0.15           # EUR/kWh -- equal to import for exp01
+
+load:
+  type: fixed                  # fixed sinusoidal load from Matlab: abs(sin(t)) * 1e3 W
+  base_load_kw: 1.0            # peak of sinusoidal load in kW
+
+pv:
+  type: perfect                # perfect foresight, no noise
+  surface_m2: 91.32
+  eta_ref: 0.24                # rendement STC du module
+  # P_pv_kw = Global30_kW * surface_m2 * eta_ref
+
+reward:
+  sigma_soc: 10.0              # penalty weight for SoC violations
+  soc_safe_min: 0.2
+  soc_safe_max: 0.9
+
+training:
+  algorithm: SAC
+  total_timesteps: 200000
+  learning_rate: 0.0003
+  batch_size: 256
+  buffer_size: 100000
+  train_split: 0.8             # fraction of DATES (not rows) for training
+  split_method: temporal        # chronological, never random

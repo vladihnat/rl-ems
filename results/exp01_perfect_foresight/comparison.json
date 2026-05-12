@@ -1,0 +1,15 @@
+{
+  "rl_net_cost": -2.6436139559950806,
+  "milp_net_cost": -4.363913439677107,
+  "relative_gap": 0.3942102673350263,
+  "rl_total_cost": 9.018024571430919,
+  "milp_total_cost": 2.0928321830830203,
+  "rl_total_revenue": 11.661638527426,
+  "milp_total_revenue": 6.456745622760128,
+  "rl_soc_violations": 54,
+  "milp_soc_violations": 0,
+  "rl_self_consumption": -1.1251033334584073,
+  "milp_self_consumption": 0.5068227400124431,
+  "rl_peak_import": 7.736380995327421,
+  "milp_peak_import": 0.8881374997893142
+}

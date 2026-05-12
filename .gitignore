@@ -1,0 +1,21 @@
+# --- Dossiers projet exclus ---
+rapport/
+duchaud-JL/
+
+# --- Python bytecode / caches ---
+__pycache__/
+*.pyc
+*.pyo
+
+# --- Environnements virtuels ---
+.venv/
+env/
+venv/
+
+# --- macOS ---
+.DS_Store
+
+# --- Packaging / distribution ---
+*.egg-info/
+dist/
+build/

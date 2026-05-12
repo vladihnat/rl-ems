@@ -1,0 +1,41 @@
+{
+  "rl": {
+    "total_cost": 9.018024571430919,
+    "total_revenue": 11.661638527426,
+    "net_cost": -2.6436139559950806,
+    "soc_violations": 54,
+    "self_consumption_rate": -1.1251033334584073,
+    "peak_grid_import": 7.736380995327421,
+    "energy_imported_kwh": 60.12016380953946,
+    "energy_exported_kwh": 77.74425684950667,
+    "total_reward": -2.577439221127623
+  },
+  "milp": {
+    "total_cost": 2.0928321830830203,
+    "total_revenue": 6.456745622760128,
+    "net_cost": -4.363913439677107,
+    "soc_violations": 0,
+    "self_consumption_rate": 0.5068227400124431,
+    "peak_grid_import": 0.8881374997893142,
+    "energy_imported_kwh": 13.952214553886805,
+    "energy_exported_kwh": 43.04497081840084,
+    "total_reward": 4.3639134396771055,
+    "solver_status": "optimal",
+    "objective_value": -4.363913439677106
+  },
+  "comparison": {
+    "rl_net_cost": -2.6436139559950806,
+    "milp_net_cost": -4.363913439677107,
+    "relative_gap": 0.3942102673350263,
+    "rl_total_cost": 9.018024571430919,
+    "milp_total_cost": 2.0928321830830203,
+    "rl_total_revenue": 11.661638527426,
+    "milp_total_revenue": 6.456745622760128,
+    "rl_soc_violations": 54,
+    "milp_soc_violations": 0,
+    "rl_self_consumption": -1.1251033334584073,
+    "milp_self_consumption": 0.5068227400124431,
+    "rl_peak_import": 7.736380995327421,
+    "milp_peak_import": 0.8881374997893142
+  }
+}
