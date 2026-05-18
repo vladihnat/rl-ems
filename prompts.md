@@ -1,4 +1,4 @@
-Prompt pour 1e implementation (prévision parfaite, charges fixes + sinusoidale, rendement fixes, prix fixes) : 
+**Prompt pour 1e implementation (prévision parfaite, charges fixes + sinusoidale, rendement fixes, prix fixes) :** 
 ============================================================================================
 
 Implement the initial experiment (exp01: perfect foresight, fixed load, fixed efficiency, fixed prices) for a microgrid RL project. Read the python-microgrid docs at https://python-microgrid.readthedocs.io/en/latest/ and the repo at https://github.com/ahalev/python-microgrid before writing any code, to understand the module APIs (BatteryModule, RenewableModule, LoadModule, GridModule) and ContinuousMicrogridEnv.
@@ -314,6 +314,237 @@ matplotlib
 
   ----------------
 
+**Prompt pour plots :**
+=================
 
+You are tasked with implementing a Python monitoring and visualization system for a 
+Reinforcement Learning Energy Management System (RL-EMS). This system replicates and 
+adapts the existing MATLAB monitoring infrastructure built by my supervisor.
 
-  
+CRITICAL CONTEXT: These plots are NOT used during RL training. They are used AFTER 
+training, when evaluating the trained agent on a concrete optimization example 
+(e.g. a full day). The trained model is loaded, meteorological data is fed in as 
+CSV input, and the agent runs step-by-step through a simulation that mimics real 
+deployment conditions. Once the simulation is complete, the two plots are displayed 
+interactively via matplotlib's plt.show(). All data inputs and outputs are CSV files.
+
+## STEP 1 — READ AND UNDERSTAND (mandatory before writing any code)
+
+Read the following MATLAB files carefully and in order. For each file, also read any 
+file it references or calls if relevant to understanding data structures or plot logic.
+
+Primary files to read:
+1. duchaud-JL/model-predictive-control/Classes/EnergyManagementSystem/@EMS/plot.m
+   → Main visualization: area-stairs plot of power variables on cross axes.
+   NOTE: my supervisor implemented complicated workarounds to compensate for 
+   MATLAB's lack of native filled-stair support. In Python with matplotlib we can 
+   achieve this much more simply with fill_between(..., step='post'). Read the file 
+   to understand WHAT is displayed and the visual conventions, not to replicate 
+   HOW it's implemented.
+2. duchaud-JL/model-predictive-control/Classes/MicroGrid/@MicroGrid/MicroGrid.m
+   → Lines 41-46: definition of the `monitoTable` dependent property and the 
+     raw `Monitoring` matrix (nPoints × 6), columns: [t, Pp, Pl, SoC, Pb, Pg]
+3. duchaud-JL/model-predictive-control/Classes/MicroGrid/subclasses/@MicroGridSimu/insert_monitoring_data.m
+   → How monitoring data is written at each timestep (pre-allocated indexed write)
+4. duchaud-JL/model-predictive-control/Classes/PowerManagementSystem/@PMS/follow.m
+   → Line 3: the call to insert_monitoring_data(state) at each timestep
+5. duchaud-JL/model-predictive-control/Classes/ModelPredictiveControl/@MPC/plot_splitted.m
+   → Second plot: Pp, Pb, Pg, SoC columns compared against MILP setpoints 
+     from concat_optim_history()
+6. duchaud-JL/model-predictive-control/Classes/ModelPredictiveControl/@MPC/simu.m
+   → Line 15: initialization of the Monitoring matrix at simulation start
+
+Also read any helper referenced (e.g. num2dt(), concat_optim_history()) if needed 
+to understand data shapes or time handling.
+
+After reading, write a brief internal summary of:
+- The exact column semantics of the monitoring matrix
+- The visual structure of both plots (what goes where, colors, axes orientation)
+- The "cross axes" trick in plot.m (positive = discharge/production above, 
+  negative = charge/consumption below)
+- How plot_splitted.m compares setpoints vs actuals
+
+Finally read the current RL implementations to understand the signs conventions and logic.
+
+## STEP 2 — IMPLEMENT monitoring_table.py
+
+Create `monitoring/monitoring_table.py`:
+
+- Class `MonitoringTable` that accumulates state/action data at each RL 
+  decision step during a post-training optimization simulation.
+- Internal storage: pre-allocated numpy array of shape (n_steps, 6), columns:
+  [timestamp, Pp, Pl, SoC, Pb, Pg]
+  matching exactly the MATLAB Monitoring matrix semantics.
+- Method `insert(step_idx, state_dict)` to write a row at each timestep.
+  `state_dict` keys: `pp` (PV power), `pl` (load), `soc` (battery SoC, 0-100%), 
+  `pb` (battery power, positive=discharge), `pg` (grid power).
+  Mirror of MATLAB's insert_monitoring_data — indexed write into pre-allocated array.
+- Method `to_dataframe()` returning a pandas DataFrame with named columns and 
+  a proper datetime index (equivalent of MATLAB's timetable + num2dt()).
+- Method `reset(n_steps)` to reinitialize for a new simulation run.
+- Method `to_csv(path)` to export the full monitoring table as CSV.
+- Method `get_total_cost(buy_price, sell_price)` that computes the total 
+  optimization cost from the Pg column (grid import/export), to be displayed 
+  as the plot title later.
+- Add docstrings explaining sign convention: Pb positive = battery discharging 
+  = power injected into the microgrid bus. Pg positive = export to grid, 
+  negative = import from grid.
+
+## STEP 3 — IMPLEMENT plot_power.py (filled-stairs power plot)
+
+Create `monitoring/plot_power.py` replicating the VISUAL RESULT of 
+@EMS/plot.m using matplotlib. This is the main output visualization of an 
+optimization run.
+
+Context for understanding the plot:
+- In the MILP case, this plot shows the planned actions for a 6h optimization 
+  horizon, all known in advance.
+- In the RL case, the agent decides one action per timestep Δt. To generate 
+  the equivalent plot, we run the trained agent step-by-step through the 
+  simulation, accumulate all decisions in MonitoringTable, and THEN build 
+  this plot from the complete table. The result looks identical — stacked 
+  filled stairs — but was built incrementally rather than from a single plan.
+
+Requirements:
+- Function `plot_power(monitoring_df, delta_t_minutes=10, cost=None)` 
+  → displays the plot via plt.show(), no file saved
+- "Filled stairs" style: use `ax.fill_between(..., step='post')` to create 
+  filled step curves. This replaces the complicated MATLAB workarounds simply.
+- Cross-axes layout: y=0 line clearly visible as the dividing axis between:
+  - Upper half (y > 0): production / discharge / import
+  - Lower half (y < 0): consumption / charge / export
+  Implement via `ax.spines['bottom'].set_position('zero')`, hide top/right 
+  spines, keep left spine.
+- Variables to plot as filled stairs:
+  - Pp: PV production (positive, yellow/orange fill)
+  - Pl: Load demand (negative, red/coral fill); for the fixed case not stairs needed but only the superposition of the load curve self.base_load_kw * np.abs(np.sin(2.0 * np.pi * t_hours / 48.0)) from envs/components/load.py
+  - Pb: Battery power (green if discharging >0, blue if charging <0; 
+    split into two traces by sign)
+  - Pg: Grid power (grey fill, positive=import, negative=export)
+- The layout must make it visually obvious whether at any instant t the 
+  battery is charging AND discharging simultaneously (which would be 
+  physically impossible — this is a key validation check).
+- Title: include the total optimization cost if `cost` is provided 
+  (e.g. "Optimization Result — Cost: 12.34 €")
+- X-axis: time labels formatted as HH:MM
+- Y-axis label: Power (kW)
+- Use matplotlib's interactive backend: the user will zoom and pan using 
+  the toolbar (built-in with plt.show()). This is sufficient for analysis.
+
+## STEP 4 — IMPLEMENT plot_monitoring.py (comparison plot with forecast errors)
+
+Create `monitoring/plot_monitoring.py` adapting @MPC/plot_splitted.m 
+to the RL context. This plot compares what actually happened against what 
+was forecast.
+
+Requirements:
+- Function `plot_monitoring(monitoring_df, forecast_df=None, delta_t_minutes=10)` 
+  → displays the plot via plt.show(), no file saved
+- `forecast_df`: optional DataFrame with the same columns as monitoring_df 
+  but containing the FORECAST values (predicted PV, predicted load, etc.) 
+  that the agent received as observations. When provided, forecast is 
+  overlaid on top of actuals to visualize prediction errors.
+- 4-panel subplot figure (4 rows × 1 col, shared x-axis):
+  Panel 1: Pp — actual PV (solid line) + forecast PV (dashed line, if provided)
+  Panel 2: Pl — actual load (solid) + forecast load (dashed, if provided)
+  Panel 3: Pb — battery power with cross-axes (y=0 spine), actual only 
+    (battery action is decided by the agent, not forecast)
+  Panel 4: SoC — actual trajectory with markers at each decision step (dots 
+    at each Δt to show the step-by-step nature of RL decisions). 
+    Add horizontal dashed lines at 20% and 90% (operational bounds). 
+    Y-axis 0-100%.
+- When forecast_df is provided, shade the area between forecast and actual 
+  on Pp and Pl panels to highlight forecast errors visually 
+  (use fill_between with a semi-transparent color).
+- Each panel is independently zoomable via matplotlib toolbar.
+- Subtitle: "RL Agent — step-by-step decisions (Δt = X min)"
+
+## STEP 5 — IMPLEMENT run_optimization_example.py
+
+Create `monitoring/run_optimization_example.py` — a standalone script 
+that simulates real-world deployment conditions for the trained RL agent.
+
+This script mimics what happens in live deployment: the agent receives 
+meteorological data (PV irradiance forecasts, load forecasts) and makes 
+decisions step-by-step, exactly as it would on the real microgrid.
+
+Input data (all CSV files):
+- Meteorological / forecast CSV: contains the forecasted PV irradiance and 
+  load for the simulation horizon (e.g. columns: timestamp, pv_forecast, 
+  load_forecast). This is what the agent "sees" as observation.
+- Optionally, a ground-truth CSV with actual PV and load values 
+  (to compute forecast errors for plot_monitoring).
+
+Pipeline:
+1. Load the trained RL model from a saved checkpoint
+2. Load the meteorological forecast CSV via pandas
+3. Initialize MonitoringTable with the number of steps for the simulation 
+   horizon (e.g. 144 steps for a 24h day at Δt=10min)
+4. Run the simulation loop:
+    obs = env.reset()
+    for step in range(n_steps):
+      action = model.predict(obs)
+      obs, reward, done, info = env.step(action)
+## MonitoringTable.insert() is called automatically inside env.step()
+5. Export MonitoringTable as CSV: `monitoring_table.to_csv('monitoring/runs/monitoring_table.csv')`
+6. Compute total cost via `monitoring_table.get_total_cost()`
+7. Display both plots interactively :
+   - `plot_power(monitoring_df, cost=total_cost)`
+   - `plot_monitoring(monitoring_df, forecast_df=forecast_data)`
+   The user inspects, zooms, closes the windows.
+
+Output files (all CSV):
+- `monitoring/runs/monitoring_table.csv` — full monitoring table (the key deliverable 
+  for my supervisor)
+- The meteorological input CSV is kept as-is for traceability
+
+NO HTML output, NO PNG output. Plots are displayed live via plt.show() 
+for interactive analysis. CSVs are the permanent record.
+
+Find the existing RL codebase to understand:
+- How the trained model is saved and loaded
+- What the observation/action format looks like
+- How to extract Pp, Pl, SoC, Pb, Pg from the env's state/obs/info
+Create a mapping dict if variable names differ from the MATLAB conventions.
+
+## STEP 6 — WIRE MonitoringTable INTO THE ENVIRONMENT
+
+Find the existing environment or simulation code. Add MonitoringTable as an 
+attribute of the environment (or a wrapper) so that `insert()` is called 
+automatically at each `env.step()`. This way any script running the env 
+(evaluation, optimization example) automatically accumulates monitoring data 
+without manual insertion code scattered everywhere.
+
+The MonitoringTable should be accessible via `env.monitoring_table` and 
+auto-reset on `env.reset()`.
+
+## STEP 7 — TESTS
+
+Write `tests/test_monitoring.py` with at least:
+- A test that inserts 144 synthetic timesteps (24h with 10 minutes time steps) and checks `to_dataframe()` 
+  has correct shape, column names, and datetime index
+- A test that `get_total_cost()` returns correct value for known inputs
+- A test that `to_csv()` produces a valid CSV readable by pandas
+- A test that calls `plot_power()` on synthetic data without error 
+  (use matplotlib's Agg backend to avoid display: 
+  `matplotlib.use('Agg')` before import pyplot)
+- A test that calls `plot_monitoring()` with and without forecast_df 
+  without error
+- A test that verifies sign conventions: inserting Pb > 0 appears in the 
+  upper half, Pb < 0 in the lower half
+
+## CONVENTIONS AND CONSTRAINTS
+
+- All new files go under `monitoring/` with an `__init__.py` 
+  that exports MonitoringTable, plot_power, plot_monitoring
+- Dependencies: numpy, pandas, matplotlib (all already in the project). 
+  No plotly, no HTML output.
+- All persistent data is CSV. Plots are transient (plt.show() only).
+- Sign convention for Pb must match current implementation and MATLAB exactly: 
+  positive = battery discharging = power into the bus
+- The cross-axes layout is REQUIRED — it is my supervisor's visual convention 
+  and must be preserved for compatibility
+- Add `# MATLAB equivalent: <filename> line X` comments near any logic 
+  that directly mirrors a MATLAB implementation detail
+- If the existing Python codebase uses different variable names for 
+  Pp/Pl/Pb/Pg/SoC, create a mapping dict and document the correspondence

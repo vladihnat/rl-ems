@@ -80,13 +80,16 @@ def clean_file(input_path: str | Path, output_path: str | Path) -> None:
 
     df["date"] = df["Time"].dt.date.astype(str)
     df["hour"] = df["Time"].dt.hour
-    df["timestep"] = df["Time"].dt.minute // 5
+    # df["timestep"] = df["Time"].dt.minute // 5
     df["day_of_year"] = df["Time"].dt.day_of_year
 
-    df["hour_sin"], df["hour_cos"] = _sin_cos(df["hour"], 24)
+    t0 = df["Time"].iloc[0]
+    t_hours = (df["Time"] - t0).dt.total_seconds() / 3600.0
+
+    df["hour_sin"], df["hour_cos"] = _sin_cos(t_hours, 24)
     # Uncomment if sin_cos timestep encoding is desired :
-    # df["timestep_sin"], df["timestep_cos"] = _sin_cos(df["timestep"], 12) 
-    df["doy_sin"], df["doy_cos"] = _sin_cos(df["day_of_year"], 365)
+    # df["timestep_sin"], df["timestep_cos"] = _sin_cos(df["timestep"], 12)
+    df["doy_sin"], df["doy_cos"] = _sin_cos(t_hours, 24 * 365.2425)
 
     df["Time"] = df["Time"].dt.strftime("%Y-%m-%d %H:%M:%S")
 
