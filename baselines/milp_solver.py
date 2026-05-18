@@ -60,6 +60,7 @@ def run_milp(env, config: dict) -> dict:
     # Since this makes the problem nonlinear, we introduce auxiliary variables.
     Pb_charge = cp.Variable(T, nonneg=True)  # magnitude of charging
     Pb_discharge = cp.Variable(T, nonneg=True)  # magnitude of discharging
+    b = cp.Variable(T, boolean=True)  # b[t]=1 → discharge, b[t]=0 → charge
 
     constraints.append(Pb == Pb_discharge - Pb_charge)
 
@@ -69,8 +70,9 @@ def run_milp(env, config: dict) -> dict:
 
     constraints.append(soc >= soc_min)
     constraints.append(soc <= soc_max)
-    constraints.append(Pb_charge <= max_charge)
-    constraints.append(Pb_discharge <= max_discharge)
+    # Mutual exclusion: prevent simultaneous charge and discharge (Duchaud-JL strategy)
+    constraints.append(Pb_discharge <= max_discharge * b)
+    constraints.append(Pb_charge    <= max_charge    * (1 - b))
 
     objective = cp.Minimize(
         cp.sum(price_imp * P_imp - price_exp * P_exp) * delta_t_h
@@ -95,6 +97,8 @@ def run_milp(env, config: dict) -> dict:
         "r_eco": -(price_imp * np.maximum(Pg_sol, 0) - price_exp * np.maximum(-Pg_sol, 0)) * delta_t_h,
         "r_soc": np.zeros(T),
         "reward": -(price_imp * np.maximum(Pg_sol, 0) - price_exp * np.maximum(-Pg_sol, 0)) * delta_t_h,
+        "Pb_charge": Pb_charge.value,
+        "Pb_discharge": Pb_discharge.value,
     }
 
     metrics = compute_metrics(history, delta_t_h, soc_min, soc_max, price_imp, price_exp)
