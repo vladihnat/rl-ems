@@ -17,7 +17,6 @@
 ├── baselines/
 │   └── milp_solver.py
 ├── configs/
-│   └── exp01_perfect_foresight.yaml
 ├── data/
 │   ├── clean_meteo.py
 │   └── Pyranometer data* # Raw and cleaned 
@@ -41,6 +40,9 @@
 │   └── metrics.py
 ├── experiments/
 │   └── run_experiment.py
+├── scripts/ # bash scripts for optimizations
+│   ├── rl/
+│   └── milp/
 └── results/ # Only 1st experiment 
 ```
 
@@ -57,6 +59,22 @@ python experiments/run_experiment.py --config configs/exp01_perfect_foresight.ya
 ```
 
 Pour lancer une nouvelle expérience, il suffit de dupliquer un fichier YAML existant, d'ajuster les champs souhaités, et de relancer le script avec le nouveau chemin de configuration. Les artefacts (modèle entraîné, métriques, courbes d'apprentissage, copie de la config utilisée) sont déposés automatiquement dans `results/<nom_experience>/`.
+
+### Scripts d'optimisation (`scripts/`)
+
+Pour simplifier l'utilisation des exemples d'optimisation (MILP et RL) et éviter d'avoir à retenir la combinaison config / modèle / chemin de sortie pour chaque expérience, des scripts bash dédiés ont été centralisés dans `scripts/rl/` et `scripts/milp/`. Chaque script fixe les bons chemins pour une expérience donnée et délègue à `monitoring/run_optimization_example.py` (RL) ou `monitoring/run_milp_optimization_example.py` (MILP).
+
+Exemples d'utilisation :
+
+```bash
+# Évaluation de l'agent RL entraîné pour exp02 (prix variables)
+bash scripts/rl/run_exp02.sh
+
+# Optimisation MILP de référence sur exp02
+bash scripts/milp/run_exp02.sh
+```
+
+Les arguments supplémentaires sont transmis tels quels au script Python sous-jacent (`"$@"`), ce qui permet de surcharger ponctuellement un paramètre sans modifier le script.
 
 ---
 
@@ -88,24 +106,54 @@ L'agent est un **SAC (Soft Actor-Critic)** implémenté via Stable-Baselines3. I
 
 Le détail complet de la hiérarchie des modules, des équations internes et du flux de communication est documenté dans **[RL_communication-flow.md](./RL_communication-flow.md)**.
 
+### Environnement custom à la place de pymgrid
+
+Initialement, le projet prévoyait de s'appuyer sur **pymgrid** pour la simulation du microréseau. Cette piste a finalement été abandonnée : à la place, `envs/base_microgrid_env.py` implémente un **environnement Gymnasium entièrement custom**, qui reproduit les fonctionnalités nécessaires de pymgrid tout en étant **totalement modifiable** (équations batterie, modèle de pertes, gestion des prix, observation, récompense, etc.). Cela évite la dépendance à une lib externe peu maintenue et donne un contrôle complet sur la physique simulée.
+
+En contrepartie, il faudra dans les travaux à venir mener des **tests et études de robustesse comparés à pymgrid** afin de vérifier que ce module custom est aussi fiable que l'environnement de référence.
+
 ---
 
-## 5. État actuel & perspectives
+## 5. Expériences
+
+### exp01 — Perfect foresight, prix fixes
+
+Premier scénario de référence : prévisions PV/charge parfaites et **prix d'achat / vente fixes et égaux**. Permet de valider que la chaîne (env custom, agent SAC, MILP) fonctionne dans le cadre le plus simple.
+
+**Problématique identifiée :** avec des prix fixes et égaux, l'agent RL produit des **cycles de charge/décharge excessifs**. En optimisant pas à pas, il ne perçoit pas que décharger à l'instant *t* (même bénéfique localement) **augmente le coût des charges futures** nécessaires pour ramener la batterie à un SoC exploitable. Le critère immédiat est neutre, mais l'usure et les pertes par cycle ne sont pas internalisées.
+
+### exp02 — Prix variables
+
+Pour observer le changement de comportement du RL face à un signal économique non trivial, `configs/exp02_variable_price.yaml` introduit des **prix variables** (non constants dans le temps).
+
+**Observation :** avec des prix variables, l'agent ne fait plus de cycles parasites — mais il **ignore complètement la batterie**, comme si l'arbitrage temporel n'était plus rentable.
+
+**Hypothèse de travail :** ce comportement vient probablement de la combinaison de :
+- **rendements (charge/décharge) fixes** au lieu de variables, qui ne capturent pas la dépendance réelle des pertes à la puissance et au SoC ;
+- **absence de coût par cycle** (vieillissement, dégradation), qui rend toute utilisation de la batterie « gratuite » ou « inutile » selon la configuration.
+
+**À faire :** explorer dans les articles déjà collectés dans **Zotero** une **expression plus intelligente des rendements** (dépendants du SoC et de la puissance) et un coût explicite par cycle, afin que l'agent retrouve un usage non trivial de la batterie sous prix variables.
+
+---
+
+## 6. État actuel & perspectives
 
 ### ✅ Implémenté
 - Agent **SAC** via Stable-Baselines3
-- Environnement **Gymnasium custom** pour microréseau PV + batterie
+- Environnement **Gymnasium custom** (`envs/base_microgrid_env.py`) en remplacement de pymgrid, totalement modifiable
 - Pipeline de données basé sur `Pyrano1w_clean.csv`
-- Configuration des expériences par fichiers **YAML**
+- Configuration des expériences par fichiers **YAML** (exp01 prix fixes, exp02 prix variables)
+- Scripts d'optimisation centralisés dans `scripts/rl/` et `scripts/milp/`
 
 ### 🔜 À venir
 - Comparaison avec d'autres algorithmes : **DDPG**, **PPO**
-- **Charges et rendements variables** (modélisation non-linéaire)
+- **Rendements variables** (dépendant du SoC / de la puissance) et **coût par cycle** — pour corriger le comportement observé sur exp01 (cycles excessifs) et exp02 (batterie ignorée). Recherche bibliographique à mener à partir de Zotero.
+- **Étude de robustesse de l'environnement custom** vs pymgrid (cas-tests comparatifs)
 - Ajout de **plots de visualisation** comparables aux sorties MATLAB du EMS original
 - Tests de **robustesse des paires sin/cos** (voir section Données)
 
 ---
 
-## 6. VIBE CODING ALERT ⚠️
+## 7. VIBE CODING ALERT ⚠️
 
 Le code de ce projet a été **généré par Claude Code (Anthropic)**, mais il a été **exhaustivement vérifié à la main** : aucune ligne n'a été acceptée sans relecture. Les prompts utilisés pour la génération ont été construits minutieusement (itérations, contraintes architecturales, vérifications croisées) et sont disponibles dans **[prompts.md](./prompts.md)** pour reproductibilité et inspection.
