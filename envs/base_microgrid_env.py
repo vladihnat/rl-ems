@@ -7,11 +7,13 @@ Reward: economic cost/revenue + SoC penalty.
 
 import gymnasium as gym
 import numpy as np
+import pandas as pd
 from gymnasium import spaces
 
 from envs.components.battery import BatteryModel
 from envs.components.load import LoadModel
 from envs.components.pv_source import PVSource
+from monitoring.monitoring_table import MonitoringTable
 
 
 class MicrogridEnv(gym.Env):
@@ -55,6 +57,11 @@ class MicrogridEnv(gym.Env):
         self.max_steps = self.pv.n_steps - self.horizon_steps
         self.step_index = 0
 
+        # Monitoring buffer — accumulates one row per call to step() during a
+        # post-training rollout. See monitoring/monitoring_table.py.
+        # Allocated lazily on reset() once we know the rollout length.
+        self.monitoring_table: MonitoringTable | None = None
+
     def _get_obs(self) -> np.ndarray:
         h_sin, h_cos, d_sin, d_cos = self.pv.get_temporal_features(self.step_index)
         soc = self.battery.soc
@@ -75,6 +82,15 @@ class MicrogridEnv(gym.Env):
         super().reset(seed=seed)
         self.step_index = 0
         self.battery.reset()
+
+        # (Re)allocate the monitoring buffer for this rollout.
+        # MATLAB equivalent: MPC/simu.m:15  obj.MicroGrid.Monitoring = nan(nPoints, 6).
+        start_ts = pd.Timestamp(self.pv.timestamps[0])
+        self.monitoring_table = MonitoringTable(
+            n_steps=self.max_steps,
+            start_time=start_ts,
+            delta_t_min=self.delta_t_min,
+        )
         return self._get_obs(), {}
 
     def step(self, action):
@@ -104,6 +120,22 @@ class MicrogridEnv(gym.Env):
         )
 
         reward = r_eco + r_soc
+
+        # Record this decision step in the monitoring buffer BEFORE incrementing
+        # step_index, so row k contains the action+state at decision step k.
+        # MATLAB equivalent: PMS/follow.m:3  obj.MicroGrid.insert_monitoring_data(state).
+        # SoC is stored in percent (0-100); battery.soc is a fraction in [0,1].
+        if self.monitoring_table is not None and self.step_index < self.monitoring_table.n_steps:
+            self.monitoring_table.insert(
+                self.step_index,
+                {
+                    "pp": float(pv_t),
+                    "pl": float(load_t),
+                    "soc": float(new_soc) * 100.0,
+                    "pb": float(Pb_effective),
+                    "pg": float(P_grid),
+                },
+            )
 
         self.step_index += 1
         terminated = self.step_index >= self.max_steps
