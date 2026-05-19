@@ -12,46 +12,36 @@
 ├── README.md
 ├── prompts.md
 ├── requirements.txt
-├── test_compat.py
-├── explore_pymgrid25.py
 ├── agents/
-│   ├── __init__.py
 │   └── sac_agent.py
 ├── baselines/
-│   ├── __init__.py
 │   └── milp_solver.py
 ├── configs/
 │   └── exp01_perfect_foresight.yaml
 ├── data/
 │   ├── clean_meteo.py
-│   ├── Pyrano1w.csv
-│   ├── Pyrano1w_clean.csv
-│   ├── Pyrano1M.csv
-│   ├── Pyrano1M_clean.csv
-│   ├── Pyrano1Y.csv
-│   └── Pyrano1Y_clean.csv
+│   └── Pyranometer data* # Raw and cleaned 
 ├── envs/
-│   ├── __init__.py
 │   ├── base_microgrid_env.py
 │   ├── registry.py
 │   └── components/
-│       ├── __init__.py
 │       ├── battery.py
 │       ├── load.py
 │       └── pv_source.py
+├── monitoring/
+│   ├── monitoring_table.py
+│   ├── plot_monitoring_milp.py
+│   ├── plot_monitoring.py
+│   ├── plot_power.py
+│   ├── run_milp_optimization_example.py
+│   ├── run_optimization_example.py
+│   └── runs/ # CSV of plannings 
 ├── evaluation/
-│   ├── __init__.py
 │   ├── compare.py
 │   └── metrics.py
 ├── experiments/
 │   └── run_experiment.py
-└── results/
-    └── exp01_perfect_foresight/
-        ├── comparison.json
-        ├── config_used.yaml
-        ├── metrics.json
-        ├── sac_model.zip
-        └── training_curves.png
+└── results/ # Only 1st experiment 
 ```
 
 ---
