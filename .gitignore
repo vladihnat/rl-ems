@@ -1,8 +1,12 @@
 # --- Dossiers projet exclus ---
-rapport/
+rapport/articles/
+rapport/figures/charge-fixe-sin.png
+rapport/figures/receding_horizon_ems.svg
+rapport/figures/sin-cos-heure.png
+rapport/notesIdees.md 
 duchaud-JL/
 results/
-
+tests/
 # --- Fichiers exclus ---
 data/*old.csv
 data/test*
