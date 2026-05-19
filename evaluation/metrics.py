@@ -17,7 +17,7 @@ def compute_metrics(
         history: dict with keys P_grid, soc, load_t, etc. (numpy arrays).
         delta_t_h: timestep duration in hours.
         soc_min, soc_max: safe SoC bounds.
-        price_import, price_export: EUR/kWh prices.
+        price_import, price_export: EUR/kWh prices — scalar or array of shape (T,).
 
     Returns:
         dict of scalar metrics.

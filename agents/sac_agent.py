@@ -86,8 +86,9 @@ def evaluate_sac(model, env) -> dict:
     delta_t_h = env.delta_t_h
     soc_min = env.cfg["reward"]["soc_safe_min"]
     soc_max = env.cfg["reward"]["soc_safe_max"]
-    price_import = env.price_import
-    price_export = env.price_export
+    T = len(history["P_grid"])
+    price_import = env.price_signal.import_prices[:T]
+    price_export = env.price_signal.export_prices[:T]
 
     metrics = compute_metrics(history, delta_t_h, soc_min, soc_max, price_import, price_export)
     metrics["history"] = history

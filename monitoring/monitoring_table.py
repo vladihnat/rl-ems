@@ -169,7 +169,7 @@ class MonitoringTable:
 
     # ------------------------------------------------------------------ cost
 
-    def get_total_cost(self, buy_price: float, sell_price: float) -> float:
+    def get_total_cost(self, buy_price, sell_price) -> float:
         """Total optimization cost over the rollout, in the same currency as the prices.
 
         cost = sum( max(Pg, 0) * buy_price * dt )  -  sum( max(-Pg, 0) * sell_price * dt )
@@ -177,16 +177,27 @@ class MonitoringTable:
         Pg > 0 means importing from the grid (we pay `buy_price`).
         Pg < 0 means exporting to the grid (we earn `sell_price`).
         NaN rows (unfilled timesteps) are ignored.
+
+        Args:
+            buy_price:  scalar float or array of shape (n_steps,) in EUR/kWh.
+            sell_price: scalar float or array of shape (n_steps,) in EUR/kWh.
         """
-        pg = self._data[:, COL_PG]
-        mask = ~np.isnan(pg)
+        pg_full = self._data[:, COL_PG]
+        mask = ~np.isnan(pg_full)
         if not np.any(mask):
             return 0.0
-        pg = pg[mask]
+        pg = pg_full[mask]
+
+        buy = np.asarray(buy_price)
+        sell = np.asarray(sell_price)
+        if buy.ndim > 0:
+            buy = buy[: len(pg_full)][mask]
+        if sell.ndim > 0:
+            sell = sell[: len(pg_full)][mask]
 
         import_kw = np.maximum(pg, 0.0)
         export_kw = np.maximum(-pg, 0.0)
-        cost = float(np.sum(import_kw * buy_price - export_kw * sell_price) * self.delta_t_h)
+        cost = float(np.sum(import_kw * buy - export_kw * sell) * self.delta_t_h)
         return cost
 
     # ------------------------------------------------------------------ misc

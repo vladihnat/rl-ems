@@ -12,6 +12,7 @@ from gymnasium import spaces
 
 from envs.components.battery import BatteryModel
 from envs.components.load import LoadModel
+from envs.components.price_signal import PriceSignal
 from envs.components.pv_source import PVSource
 from monitoring.monitoring_table import MonitoringTable
 
@@ -24,20 +25,20 @@ class MicrogridEnv(gym.Env):
         pv_source: PVSource,
         load_model: LoadModel,
         battery: BatteryModel,
+        price_signal: PriceSignal,
         config: dict,
     ):
         super().__init__()
         self.pv = pv_source
         self.load = load_model
         self.battery = battery
+        self.price_signal = price_signal
         self.cfg = config
 
         self.delta_t_min = config["time"]["delta_t_min"]
         self.delta_t_h = self.delta_t_min / 60.0
         self.horizon_steps = int(config["time"]["horizon_h"] * 60 / self.delta_t_min)
 
-        self.price_import = config["grid"]["price_import"]
-        self.price_export = config["grid"]["price_export"]
         self.max_import_kw = config["grid"]["max_import_kw"]
         self.max_export_kw = config["grid"]["max_export_kw"]
 
@@ -48,7 +49,8 @@ class MicrogridEnv(gym.Env):
         self.max_charge_kw = config["battery"]["max_charge_kw"]
         self.max_discharge_kw = config["battery"]["max_discharge_kw"]
 
-        obs_dim = 9 + self.horizon_steps
+        price_forecast_dim = self.horizon_steps if self.price_signal.has_forecast else 0
+        obs_dim = 9 + self.horizon_steps + price_forecast_dim
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
         )
@@ -68,15 +70,20 @@ class MicrogridEnv(gym.Env):
         load_t = self.load.get_load(self.step_index)
         pv_t = self.pv.get_irradiance(self.step_index)
         pv_forecast = self.pv.get_forecast(self.step_index, self.horizon_steps)
+        p_imp = self.price_signal.get_import_price(self.step_index)
+        p_exp = self.price_signal.get_export_price(self.step_index)
 
-        obs = np.concatenate([
+        parts = [
             np.array([h_sin, h_cos, d_sin, d_cos], dtype=np.float32),
             np.array([soc, load_t], dtype=np.float32),
-            np.array([self.price_import, self.price_export], dtype=np.float32),
+            np.array([p_imp, p_exp], dtype=np.float32),
             np.array([pv_t], dtype=np.float32),
             pv_forecast,
-        ])
-        return obs
+        ]
+        if self.price_signal.has_forecast:
+            parts.append(self.price_signal.get_import_forecast(self.step_index, self.horizon_steps))
+
+        return np.concatenate(parts)
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -109,9 +116,11 @@ class MicrogridEnv(gym.Env):
         P_grid = load_t - pv_t - Pb_effective
         P_grid = np.clip(P_grid, -self.max_export_kw, self.max_import_kw)
 
+        price_imp = self.price_signal.get_import_price(self.step_index)
+        price_exp = self.price_signal.get_export_price(self.step_index)
         r_eco = -(
-            self.price_import * max(P_grid, 0.0)
-            - self.price_export * max(-P_grid, 0.0)
+            price_imp * max(P_grid, 0.0)
+            - price_exp * max(-P_grid, 0.0)
         ) * self.delta_t_h
 
         r_soc = -self.sigma_soc * (
@@ -149,6 +158,8 @@ class MicrogridEnv(gym.Env):
             "r_soc": r_soc,
             "pv_t": pv_t,
             "load_t": load_t,
+            "price_import": price_imp,
+            "price_export": price_exp,
         }
 
         obs = self._get_obs() if not terminated else np.zeros(

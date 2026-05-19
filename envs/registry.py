@@ -9,6 +9,7 @@ import yaml
 from envs.base_microgrid_env import MicrogridEnv
 from envs.components.battery import BatteryModel
 from envs.components.load import LoadModel
+from envs.components.price_signal import PriceSignal
 from envs.components.pv_source import PVSource
 
 
@@ -52,7 +53,10 @@ def make_env(config_path: str):
         )
 
         battery = BatteryModel(cfg_dict["battery"])
-        return MicrogridEnv(pv, load, battery, cfg_dict)
+        price_signal = PriceSignal(
+            cfg_dict["grid"], pv.timestamps, cfg_dict["time"]["delta_t_min"]
+        )
+        return MicrogridEnv(pv, load, battery, price_signal, cfg_dict)
 
     train_env = _build_env(train_idx, copy.deepcopy(cfg))
     test_env = _build_env(test_idx, copy.deepcopy(cfg))

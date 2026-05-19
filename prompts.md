@@ -548,3 +548,109 @@ Write `tests/test_monitoring.py` with at least:
   that directly mirrors a MATLAB implementation detail
 - If the existing Python codebase uses different variable names for 
   Pp/Pl/Pb/Pg/SoC, create a mapping dict and document the correspondence
+
+----
+
+**exp02 — Variable Grid Pricing (MATLAB-inspired sinusoidal tariff)**
+======================================================================
+
+     Context
+
+     The current implementation uses fixed import/export prices (0.15 EUR/kWh for both) defined as scalars
+     in the YAML config. The reference MATLAB code (run_Ems.m) uses a time-varying price function:
+
+     Param.fun_prix_reseau = @(t, E) (5 + sin(t)') .* E' .* (E'>0) + ones(size(t')) .* E' .* (E'<=0);
+
+     This encodes:
+     - Import price (E > 0): 5 + sin(t) — time-varying (sinusoidal pattern)
+     - Export price (E ≤ 0): 1 — constant
+
+     The goal is to add a new experiment exp02_variable_price that introduces this kind of time-dependent
+     pricing. Because the price is now informative (it changes in a predictable pattern), the agent must see
+      a price forecast in its observation to learn to shift energy use toward cheap periods — making this a
+     meaningfully harder and more realistic experiment than exp01.
+
+     ---
+     What changes
+
+     1. New: envs/components/price_signal.py
+
+     New PriceSignal component, parallel to PVSource/LoadModel.
+
+     Supports two types (via config["type"]):
+     - "fixed" → wraps the current scalar prices, no forecast needed (backward-compatible with exp01)
+     - "sinusoidal" → computes base_import + amplitude * sin(2π * hour / period_h) for import price,
+     constant export price
+
+     Pre-computes the full import/export price arrays from timestamps at construction.
+
+     Public API:
+     price_signal.get_import_price(step_idx: int) -> float
+     price_signal.get_export_price(step_idx: int) -> float
+     price_signal.get_import_forecast(step_idx: int, horizon: int) -> np.ndarray  # shape (horizon,)
+     price_signal.has_forecast: bool  # True for sinusoidal
+     price_signal.import_prices: np.ndarray  # full array (for MILP)
+     price_signal.export_prices: np.ndarray  # full array (for MILP)
+
+     2. New: configs/exp02_variable_price.yaml
+
+     Clone of exp01 with:
+     experiment:
+       name: exp02_variable_price
+
+     grid:
+       max_import_kw: 17.0
+       max_export_kw: 17.0
+       price_type: sinusoidal
+       base_import: 0.15        # EUR/kWh — mean import price
+       amplitude: 0.05          # ±0.05 EUR/kWh variation (10–20 c€/kWh range)
+       period_h: 24.0           # daily sinusoidal cycle
+       base_export: 0.08        # constant export price (lower than import)
+
+     The daily amplitude 0.05 on a base of 0.15 mirrors the MATLAB spirit (sin fluctuates around 5, export
+     is flat at 1) but uses realistic EUR/kWh magnitudes. Peak import at noon (sin(π/2)=1) → 0.20 EUR/kWh;
+     trough at midnight → 0.10 EUR/kWh.
+
+     3. Modify: envs/registry.py
+
+     In _build_env(), after constructing PVSource, also build PriceSignal from cfg["grid"] + pv.timestamps:
+     from envs.components.price_signal import PriceSignal
+     price_signal = PriceSignal(cfg_dict["grid"], pv.timestamps, cfg_dict["time"]["delta_t_min"])
+     Pass it to MicrogridEnv(pv, load, battery, price_signal, cfg_dict).
+
+     The cfg["grid"] for exp01 will not have price_type, so PriceSignal.__init__ defaults to "fixed" using
+     the existing price_import/price_export keys — fully backward-compatible.
+
+     4. Modify: envs/base_microgrid_env.py
+
+     - Constructor: accept price_signal: PriceSignal parameter; store as self.price_signal; remove
+     self.price_import/self.price_export scalar attributes
+     - obs_dim computation:
+     price_forecast_dim = self.horizon_steps if self.price_signal.has_forecast else 0
+     obs_dim = 9 + self.horizon_steps + price_forecast_dim
+     - _get_obs(): replace fixed price scalars with price_signal.get_import_price(step_index) /
+     get_export_price(step_index); append price_signal.get_import_forecast(step_index, horizon_steps) if
+     has_forecast
+     - step(): use price_signal.get_import_price(step_index) / get_export_price(step_index) for reward;
+     expose them in info dict
+
+     5. Modify: baselines/milp_solver.py
+
+     Replace scalar price_imp/price_exp with full arrays from the env's price signal:
+     price_imp_vec = env.price_signal.import_prices[:T]   # shape (T,)
+     price_exp_vec = env.price_signal.export_prices[:T]
+     CVXPY objective becomes element-wise (still linear — valid MILP):
+     objective = cp.Minimize(
+         cp.sum(cp.multiply(price_imp_vec, P_imp) - cp.multiply(price_exp_vec, P_exp)) * delta_t_h
+     )
+     The history dict and compute_metrics call pass arrays instead of scalars.
+
+     6. Modify: evaluation/metrics.py
+
+     No code change needed — np.sum(import_power * price_import * delta_t_h) already works when price_import
+      is a numpy array (broadcasting). Update the docstring type hint from float to float | np.ndarray.
+
+     7. Modify: monitoring/monitoring_table.py
+
+     Update get_total_cost(buy_price, sell_price) signature to accept float | np.ndarray. The internal
+     computation already handles arrays (all numpy ops). Update docstring only — no logic change.

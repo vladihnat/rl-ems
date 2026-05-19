@@ -148,7 +148,8 @@ def run(
     print(f"[3/4] Monitoring table written to {out_path}")
 
     total_cost = env.monitoring_table.get_total_cost(
-        buy_price=env.price_import, sell_price=env.price_export,
+        buy_price=env.price_signal.import_prices,
+        sell_price=env.price_signal.export_prices,
     )
     print(f"       Total optimization cost = {total_cost:.4f} €")
 

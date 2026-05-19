@@ -29,8 +29,8 @@ def run_milp(env, config: dict) -> dict:
     eta_d = cfg["battery"]["efficiency_discharge"]
     init_soc = cfg["battery"]["init_soc"]
 
-    price_imp = cfg["grid"]["price_import"]
-    price_exp = cfg["grid"]["price_export"]
+    price_imp = env.price_signal.import_prices[:T]
+    price_exp = env.price_signal.export_prices[:T]
     max_imp = cfg["grid"]["max_import_kw"]
     max_exp = cfg["grid"]["max_export_kw"]
 
@@ -75,7 +75,7 @@ def run_milp(env, config: dict) -> dict:
     constraints.append(Pb_charge    <= max_charge    * (1 - b))
 
     objective = cp.Minimize(
-        cp.sum(price_imp * P_imp - price_exp * P_exp) * delta_t_h
+        cp.sum(cp.multiply(price_imp, P_imp) - cp.multiply(price_exp, P_exp)) * delta_t_h
     )
 
     prob = cp.Problem(objective, constraints)

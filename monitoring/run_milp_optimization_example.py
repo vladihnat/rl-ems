@@ -157,7 +157,8 @@ def run(
     print(f"       Wrote MILP plan  CSV → {plan_path}")
 
     replay_cost = env.monitoring_table.get_total_cost(
-        buy_price=env.price_import, sell_price=env.price_export,
+        buy_price=env.price_signal.import_prices,
+        sell_price=env.price_signal.export_prices,
     )
     print(f"       env-replay cost = {replay_cost:.4f} €  "
           f"(MILP optimum = {metrics['objective_value']:.4f} €, "
