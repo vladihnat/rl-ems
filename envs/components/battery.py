@@ -47,7 +47,7 @@ class BatteryModel:
 
         soc_old = self.soc
         soc_new = soc_old - Pb * nu * delta_t_h / self.capacity_kwh
-        soc_new = np.clip(soc_new, 0.0, 1.0)
+        soc_new = np.clip(soc_new, self.soc_min, self.soc_max) # Ensure SoC stays within limits
 
         dE = (soc_old - soc_new) * self.capacity_kwh
         Pb_effective = dE / delta_t_h / nu
