@@ -125,7 +125,7 @@ class MicrogridEnv(gym.Env):
         # step_index, so row k contains the action+state at decision step k.
         # MATLAB equivalent: PMS/follow.m:3  obj.MicroGrid.insert_monitoring_data(state).
         # SoC is stored in percent (0-100); battery.soc is a fraction in [0,1].
-        if self.monitoring_table is not None and self.step_index < self.monitoring_table.n_steps:
+        if self.monitoring_table is not None and self.step_index < self.max_steps:
             self.monitoring_table.insert(
                 self.step_index,
                 {

@@ -144,7 +144,7 @@ def run(
     # ---- 4. persist + plot ------------------------------------------------
     out_path = Path(out_csv)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    env.monitoring_table.to_csv(out_path)
+    monitoring_df.to_csv(out_path)
     print(f"[3/4] Monitoring table written to {out_path}")
 
     total_cost = env.monitoring_table.get_total_cost(

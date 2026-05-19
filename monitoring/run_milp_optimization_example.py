@@ -147,7 +147,7 @@ def run(
     # ---- 5. persist both tables ------------------------------------------
     out_path = Path(out_csv)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    env.monitoring_table.to_csv(out_path)
+    monitoring_df.to_csv(out_path)
 
     plan_path = Path(plan_csv)
     plan_path.parent.mkdir(parents=True, exist_ok=True)
