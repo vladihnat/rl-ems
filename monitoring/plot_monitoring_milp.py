@@ -54,8 +54,8 @@ def plot_monitoring_milp(
     soc_safe_min: Optional[float] = None,
     soc_safe_max: Optional[float] = None,
     show: bool = True,
-) -> Tuple[plt.Figure, Tuple[plt.Axes, plt.Axes, plt.Axes, plt.Axes]]:
-    """Plot MILP setpoints vs env-replayed actuals across four stacked panels.
+) -> Tuple[plt.Figure, Tuple[plt.Axes, plt.Axes, plt.Axes, plt.Axes, plt.Axes]]:
+    """Plot MILP setpoints vs env-replayed actuals across five stacked panels.
 
     Args:
         monitoring_df: env-replayed actuals (from `MonitoringTable.to_dataframe()`).
@@ -72,7 +72,7 @@ def plot_monitoring_milp(
         show: when True, call ``plt.show()``. Tests pass False.
 
     Returns:
-        (fig, (ax_pp, ax_pb, ax_pg, ax_soc)).
+        (fig, (ax_pp, ax_pb, ax_pg, ax_soc, ax_eco)).
     """
     df = monitoring_df.copy()
     valid = ~df["Pp"].isna()
@@ -100,10 +100,10 @@ def plot_monitoring_milp(
     delta_t = pd.Timedelta(minutes=delta_t_minutes)
 
     fig, axes = plt.subplots(
-        4, 1, figsize=(11, 9), sharex=True,
-        gridspec_kw={"hspace": 0.18},
+        5, 1, figsize=(10, 8), sharex=True,
+        gridspec_kw={"hspace": 0.20, "height_ratios": [1, 1, 1, 1, 0.9]},
     )
-    ax_pp, ax_pb, ax_pg, ax_soc = axes
+    ax_pp, ax_pb, ax_pg, ax_soc, ax_eco = axes
 
     # -------- Panel 1: Pp (PV production) ---------------------------------
     # With perfect foresight, MILP and env see the same PV trace, so the two
@@ -182,10 +182,36 @@ def plot_monitoring_milp(
     ax_soc.grid(True, alpha=0.3)
     ax_soc.legend(loc="upper right", fontsize=9)
 
+    # -------- Panel 5: economic step reward + cumulative -----------------
+    if "r_eco" in df.columns:
+        r_eco = df["r_eco"].to_numpy(dtype=float)
+    else:
+        r_eco = np.full(len(df), np.nan, dtype=float)
+    r_eco_safe = np.where(np.isnan(r_eco), 0.0, r_eco)
+    bar_w = pd.Timedelta(minutes=delta_t_minutes).to_pytimedelta()
+    bar_colors_eco = np.where(r_eco_safe >= 0.0, "#2ecc71", "#e74c3c")
+    ax_eco.bar(t, r_eco_safe, width=bar_w, align="edge",
+               color=bar_colors_eco, edgecolor="none", alpha=0.75,
+               label="r_eco (step €)")
+    ax_eco.axhline(0.0, color="grey", linewidth=0.8, alpha=0.5)
+    ax_eco.set_ylabel("r_eco (€)")
+    ax_eco.grid(True, axis="y", alpha=0.3)
+
+    ax_eco_cum = ax_eco.twinx()
+    ax_eco_cum.plot(t, np.cumsum(r_eco_safe), color="#1a1a1a",
+                    linewidth=1.6, label="cumulative r_eco")
+    ax_eco_cum.set_ylabel("cumulative r_eco (€)")
+    ax_eco_cum.spines["top"].set_visible(False)
+
+    lines1, labels1 = ax_eco.get_legend_handles_labels()
+    lines2, labels2 = ax_eco_cum.get_legend_handles_labels()
+    ax_eco.legend(lines1 + lines2, labels1 + labels2,
+                  loc="upper right", fontsize=9, ncol=2)
+
     # -------- Shared x-axis ----------------------------------------------
-    ax_soc.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
-    ax_soc.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=4, maxticks=10))
-    ax_soc.set_xlabel("Time")
+    ax_eco.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+    ax_eco.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=4, maxticks=10))
+    ax_eco.set_xlabel("Time")
 
     fig.suptitle(
         f"MILP — planned setpoints vs env-replayed (Δt = {delta_t_minutes:.0f} min)",
@@ -198,4 +224,4 @@ def plot_monitoring_milp(
 
     if show:
         plt.show()
-    return fig, (ax_pp, ax_pb, ax_pg, ax_soc)
+    return fig, (ax_pp, ax_pb, ax_pg, ax_soc, ax_eco)

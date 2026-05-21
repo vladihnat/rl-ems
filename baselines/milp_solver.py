@@ -14,8 +14,7 @@ def run_milp(env, config: dict) -> dict:
     """
     cfg = config
     delta_t_h = cfg["time"]["delta_t_min"] / 60.0
-    horizon_steps = int(cfg["time"]["horizon_h"] * 60 / cfg["time"]["delta_t_min"])
-    T = env.pv.n_steps - horizon_steps
+    T = int(env.max_steps)
 
     pv_vals = np.array([env.pv.get_irradiance(t) for t in range(T)])
     load_vals = np.array([env.load.get_load(t) for t in range(T)])
@@ -88,17 +87,26 @@ def run_milp(env, config: dict) -> dict:
     Pg_sol = Pg.value
     soc_sol = soc.value
 
+    P_imp_sol = np.maximum(Pg_sol, 0.0)
+    P_exp_sol = np.maximum(-Pg_sol, 0.0)
+    r_eco_sol = -(price_imp * P_imp_sol - price_exp * P_exp_sol) * delta_t_h
+
     history = {
         "P_grid": Pg_sol,
         "Pb_effective": Pb_sol,
         "soc": soc_sol[1:],
         "pv_t": pv_vals,
         "load_t": load_vals,
-        "r_eco": -(price_imp * np.maximum(Pg_sol, 0) - price_exp * np.maximum(-Pg_sol, 0)) * delta_t_h,
+        "r_eco": r_eco_sol,
         "r_soc": np.zeros(T),
-        "reward": -(price_imp * np.maximum(Pg_sol, 0) - price_exp * np.maximum(-Pg_sol, 0)) * delta_t_h,
+        "reward": r_eco_sol,
         "Pb_charge": Pb_charge.value,
         "Pb_discharge": Pb_discharge.value,
+        "b_int": np.asarray(b.value, dtype=np.float64),
+        "P_imp": P_imp_sol,
+        "P_exp": P_exp_sol,
+        "price_imp": np.asarray(price_imp, dtype=np.float64),
+        "price_exp": np.asarray(price_exp, dtype=np.float64),
     }
 
     metrics = compute_metrics(history, delta_t_h, soc_min, soc_max, price_imp, price_exp)

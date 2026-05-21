@@ -4,8 +4,30 @@ Python port of the MATLAB `MicroGrid.Monitoring` matrix and `monitoTable`
 dependent property. One row per RL decision step; the row is written
 (indexed) at the moment the agent acts on the env.
 
-Column layout (matches MATLAB exactly):
-    [t (unix seconds, float64), Pp, Pl, SoC, Pb, Pg]
+Column layout (extended schema, 16 columns):
+    SHARED (always populated by RL or MILP rollouts):
+        t          unix seconds (float64)
+        Pp         PV production [kW], >= 0
+        Pl         load demand [kW], >= 0
+        SoC        state of charge in PERCENT (0-100)
+        Pb         battery power [kW]; >0 discharge, <0 charge
+        Pg         grid power [kW]; >0 import, <0 export
+        P_imp      grid import [kW, >=0] = max(Pg, 0)
+        P_exp      grid export [kW, >=0] = max(-Pg, 0)
+        price_imp  import price at this step [€/kWh]
+        price_exp  export price at this step [€/kWh]
+        r_eco      instantaneous economic reward [€]
+        r_soc      SoC penalty (0 when no violation)
+        reward     total step reward = r_eco + r_soc
+
+    MILP-ONLY (NaN for RL rollouts):
+        Pb_charge      auxiliary charging magnitude [kW, >=0]
+        Pb_discharge   auxiliary discharging magnitude [kW, >=0]
+        b_int          binary mutual-exclusion flag (0 or 1, stored as float)
+
+    RL-ONLY (NaN for MILP rollouts):
+        action_raw   raw action in [-1, 1] before kW scaling
+        Pb_command   scaled command [kW] before battery clamp
 
 Sign convention (must match `envs/components/battery.py` and `envs/base_microgrid_env.py`):
 - Pp: PV production [kW], always >= 0.
@@ -28,21 +50,70 @@ import numpy as np
 import pandas as pd
 
 # Column indices for the internal numpy array.
-# MATLAB equivalent: MicroGrid.m:41-46  array2table(..., {'t','Pp','Pl','SoC','Pb','Pg'})
-COL_T, COL_PP, COL_PL, COL_SOC, COL_PB, COL_PG = 0, 1, 2, 3, 4, 5
-COLUMN_NAMES = ["t", "Pp", "Pl", "SoC", "Pb", "Pg"]
-NUM_COLUMNS = 6
+# Shared columns
+COL_T            = 0
+COL_PP           = 1
+COL_PL           = 2
+COL_SOC          = 3
+COL_PB           = 4
+COL_PG           = 5
+COL_P_IMP        = 6
+COL_P_EXP        = 7
+COL_PRICE_IMP    = 8
+COL_PRICE_EXP    = 9
+COL_R_ECO        = 10
+COL_R_SOC        = 11
+COL_REWARD       = 12
+# MILP-only columns
+COL_PB_CHARGE    = 13
+COL_PB_DISCHARGE = 14
+COL_B_INT        = 15
+# RL-only columns
+COL_ACTION_RAW   = 16
+COL_PB_COMMAND   = 17
+
+COLUMN_NAMES = [
+    "t",
+    "Pp", "Pl", "SoC", "Pb", "Pg",
+    "P_imp", "P_exp",
+    "price_imp", "price_exp",
+    "r_eco", "r_soc", "reward",
+    "Pb_charge", "Pb_discharge", "b_int",
+    "action_raw", "Pb_command",
+]
+NUM_COLUMNS = len(COLUMN_NAMES)
+
+# Required keys for backward compatibility. Anything else is optional and
+# defaults to NaN.
+_REQUIRED_KEYS = ("pp", "pl", "soc", "pb", "pg")
+
+# Mapping lowercase-key → column index for optional columns.
+_OPTIONAL_KEYS = {
+    "p_imp":        COL_P_IMP,
+    "p_exp":        COL_P_EXP,
+    "price_imp":    COL_PRICE_IMP,
+    "price_exp":    COL_PRICE_EXP,
+    "r_eco":        COL_R_ECO,
+    "r_soc":        COL_R_SOC,
+    "reward":       COL_REWARD,
+    "pb_charge":    COL_PB_CHARGE,
+    "pb_discharge": COL_PB_DISCHARGE,
+    "b_int":        COL_B_INT,
+    "action_raw":   COL_ACTION_RAW,
+    "pb_command":   COL_PB_COMMAND,
+}
 
 
 class MonitoringTable:
     """Indexed-write monitoring buffer accumulated during a deployment-style rollout.
 
-    Usage:
+    Usage example:
         mt = MonitoringTable(n_steps=144,
                              start_time=pd.Timestamp("2025-05-13"),
                              delta_t_min=10)
         for k in range(144):
-            mt.insert(k, {'pp': ..., 'pl': ..., 'soc': ..., 'pb': ..., 'pg': ...})
+            mt.insert(k, {'pp': ..., 'pl': ..., 'soc': ..., 'pb': ..., 'pg': ...,
+                          'r_eco': ..., 'reward': ...})  # optional extras OK
         df = mt.to_dataframe()
         mt.to_csv("runs/monitoring_table.csv")
         cost = mt.get_total_cost(buy_price=0.15, sell_price=0.15)
@@ -64,8 +135,6 @@ class MonitoringTable:
             start_time = pd.Timestamp("1970-01-01")
         self.start_time = pd.Timestamp(start_time)
 
-        # Pre-allocate (n_steps, 6) NaN array.
-        # MATLAB equivalent: MPC/simu.m:15  obj.MicroGrid.Monitoring = nan(nPoints, 6);
         self._data: np.ndarray = np.full(
             (self.n_steps, NUM_COLUMNS), np.nan, dtype=np.float64
         )
@@ -102,16 +171,17 @@ class MonitoringTable:
     def insert(self, step_idx: int, state_dict: dict) -> None:
         """Write a single row at `step_idx` from a state dict.
 
-        Mirror of MATLAB `insert_monitoring_data` (MicroGridSimu/insert_monitoring_data.m).
-        `state_dict` must contain keys: pp, pl, soc, pb, pg (case-insensitive). SoC is
-        expected in percent (0-100).
+        Required keys (case-insensitive): pp, pl, soc, pb, pg. SoC is expected
+        in percent (0-100). Optional keys (silently ignored if unknown):
+        p_imp, p_exp, price_imp, price_exp, r_eco, r_soc, reward,
+        pb_charge, pb_discharge, b_int, action_raw, pb_command. Missing
+        optional columns stay at NaN.
         """
         if not 0 <= step_idx < self.n_steps:
             raise IndexError(
                 f"step_idx={step_idx} out of range [0, {self.n_steps})"
             )
 
-        # Accept any casing so the call site can use either pp/Pp or PV/pv etc.
         sd_lower = {k.lower(): v for k, v in state_dict.items()}
         try:
             self._data[step_idx, COL_PP] = float(sd_lower["pp"])
@@ -124,6 +194,15 @@ class MonitoringTable:
                 f"state_dict missing key {e}; required: pp, pl, soc, pb, pg"
             ) from None
 
+        for key, col in _OPTIONAL_KEYS.items():
+            if key in sd_lower and sd_lower[key] is not None:
+                try:
+                    self._data[step_idx, col] = float(sd_lower[key])
+                except (TypeError, ValueError):
+                    # Silently leave as NaN on unparseable input — keeps the
+                    # caller's hot loop free of try/except for optional fields.
+                    pass
+
         # Optional explicit timestamp override (handles non-uniform sampling).
         if "t" in sd_lower or "timestamp" in sd_lower:
             ts_raw = sd_lower.get("t", sd_lower.get("timestamp"))
@@ -133,31 +212,19 @@ class MonitoringTable:
 
     @property
     def data(self) -> np.ndarray:
-        """Raw (n_steps, 6) numpy array. Equivalent to MATLAB `obj.Monitoring`."""
+        """Raw (n_steps, NUM_COLUMNS) numpy array."""
         return self._data
 
     def to_dataframe(self) -> pd.DataFrame:
-        """Return a DataFrame with named columns and a UTC DatetimeIndex.
-
-        Mirror of MATLAB `MicroGrid.monitoTable` (MicroGrid.m:41-46 + num2dt).
-        """
-        # MATLAB equivalent: MicroGrid.m:41-46  table2timetable + num2dt(T.t)
+        """Return a DataFrame with named columns and a UTC DatetimeIndex."""
         times = pd.to_datetime(self._data[:, COL_T], unit="s", utc=True)
-        df = pd.DataFrame(
-            {
-                "Pp": self._data[:, COL_PP],
-                "Pl": self._data[:, COL_PL],
-                "SoC": self._data[:, COL_SOC],
-                "Pb": self._data[:, COL_PB],
-                "Pg": self._data[:, COL_PG],
-            },
-            index=times,
-        )
+        cols = {name: self._data[:, i] for i, name in enumerate(COLUMN_NAMES) if i != COL_T}
+        df = pd.DataFrame(cols, index=times)
         df.index.name = "t"
         return df
 
     def to_csv(self, path: Union[str, Path]) -> Path:
-        """Export the monitoring table to CSV with a `t` column (ISO 8601) + Pp/Pl/SoC/Pb/Pg.
+        """Export the monitoring table to CSV (t column + all data columns).
 
         Returns the resolved Path written.
         """

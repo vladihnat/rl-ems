@@ -70,10 +70,10 @@ def plot_monitoring(
         Pl_fc = None
 
     fig, axes = plt.subplots(
-        4, 1, figsize=(11, 9), sharex=True,
-        gridspec_kw={"hspace": 0.18},
+        5, 1, figsize=(10, 8), sharex=True,
+        gridspec_kw={"hspace": 0.20, "height_ratios": [1, 1, 1, 1, 0.9]},
     )
-    ax_pp, ax_pl, ax_pb, ax_soc = axes
+    ax_pp, ax_pl, ax_pb, ax_soc, ax_eco = axes
 
     # -------- Panel 1: Pp actual vs forecast -------------------------------
     # MATLAB equivalent: MPC/plot_splitted.m line 9-13 (Pp stairs vs monito plot)
@@ -133,10 +133,44 @@ def plot_monitoring(
     ax_soc.grid(True, alpha=0.3)
     ax_soc.legend(loc="upper right", fontsize=9)
 
+    # -------- Panel 5: economic step reward + cumulative -------------------
+    r_eco = df["r_eco"].to_numpy(dtype=float) if "r_eco" in df.columns \
+        else np.full(len(df), np.nan, dtype=float)
+    r_soc = df["r_soc"].to_numpy(dtype=float) if "r_soc" in df.columns \
+        else np.full(len(df), np.nan, dtype=float)
+    r_eco_safe = np.where(np.isnan(r_eco), 0.0, r_eco)
+    bar_w = pd.Timedelta(minutes=delta_t_minutes).to_pytimedelta()
+    bar_colors_eco = np.where(r_eco_safe >= 0.0, "#2ecc71", "#e74c3c")
+    ax_eco.bar(t, r_eco_safe, width=bar_w, align="edge",
+               color=bar_colors_eco, edgecolor="none", alpha=0.75,
+               label="r_eco (step €)")
+    ax_eco.axhline(0.0, color="grey", linewidth=0.8, alpha=0.5)
+    # SoC penalty markers: orange dot at any step with a non-zero r_soc.
+    viol = (~np.isnan(r_soc)) & (np.abs(r_soc) > 1e-12)
+    if np.any(viol):
+        ax_eco.scatter(t[viol], r_soc[viol], color="#e67e22", s=22,
+                       zorder=5, label="r_soc violation")
+    ax_eco.set_ylabel("r_eco (€)")
+    ax_eco.grid(True, axis="y", alpha=0.3)
+
+    ax_eco_cum = ax_eco.twinx()
+    reward_col = df["reward"].to_numpy(dtype=float) if "reward" in df.columns \
+        else (r_eco_safe + np.where(np.isnan(r_soc), 0.0, r_soc))
+    reward_safe = np.where(np.isnan(reward_col), 0.0, reward_col)
+    ax_eco_cum.plot(t, np.cumsum(reward_safe), color="#1a1a1a",
+                    linewidth=1.6, label="cumulative reward")
+    ax_eco_cum.set_ylabel("cumulative reward")
+    ax_eco_cum.spines["top"].set_visible(False)
+
+    lines1, labels1 = ax_eco.get_legend_handles_labels()
+    lines2, labels2 = ax_eco_cum.get_legend_handles_labels()
+    ax_eco.legend(lines1 + lines2, labels1 + labels2,
+                  loc="upper right", fontsize=9, ncol=2)
+
     # -------- x-axis (shared) ----------------------------------------------
-    ax_soc.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
-    ax_soc.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=4, maxticks=10))
-    ax_soc.set_xlabel("Time")
+    ax_eco.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+    ax_eco.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=4, maxticks=10))
+    ax_eco.set_xlabel("Time")
 
     fig.suptitle(
         f"RL Agent — step-by-step decisions (Δt = {delta_t_minutes:.0f} min)",

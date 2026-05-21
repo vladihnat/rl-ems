@@ -143,6 +143,15 @@ class MicrogridEnv(gym.Env):
                     "soc": float(new_soc) * 100.0,
                     "pb": float(Pb_effective),
                     "pg": float(P_grid),
+                    "action_raw": float(action_val),
+                    "pb_command": float(Pb_command),
+                    "p_imp":     float(max(P_grid, 0.0)),
+                    "p_exp":     float(max(-P_grid, 0.0)),
+                    "price_imp": float(price_imp),
+                    "price_exp": float(price_exp),
+                    "r_eco":     float(r_eco),
+                    "r_soc":     float(r_soc),
+                    "reward":    float(reward),
                 },
             )
 
