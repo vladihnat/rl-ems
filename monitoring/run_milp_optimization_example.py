@@ -10,8 +10,15 @@ model and the env's nonlinear one.
 Usage:
     python -m monitoring.run_milp_optimization_example \
         --config configs/exp01_perfect_foresight.yaml \
+        --forecast data/pyrano_simu.csv \
+        [--measures data/pyrano_simu.csv] \
         --out monitoring/runs/milp_monitoring_table.csv \
         --plan-out monitoring/runs/milp_plan.csv
+
+Deployment semantics mirror ``run_optimization_example.py``:
+    * ``--measures`` is the ground-truth data the env consumes step-by-step.
+      Falls back silently to ``--forecast`` (perfect foresight) when omitted.
+    * ``--forecast`` is also the data the MILP solves over.
 
 Variable-name mapping is identical to the RL example
 (see ``run_optimization_example.py`` for the table). The only RL→MILP
@@ -34,9 +41,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import matplotlib.pyplot as plt  # noqa: E402
 
 from baselines.milp_solver import run_milp  # noqa: E402
-from envs.registry import make_env  # noqa: E402
 from monitoring.plot_monitoring_milp import plot_monitoring_milp  # noqa: E402
 from monitoring.plot_power import plot_power  # noqa: E402
+from monitoring.plot_validation_milp import plot_validation_milp  # noqa: E402
+from monitoring.run_optimization_example import _build_deployment_env  # noqa: E402
 
 
 def _pb_to_action(pb_kw: float, max_charge_kw: float, max_discharge_kw: float) -> np.ndarray:
@@ -79,34 +87,37 @@ def run(
     config_path: str,
     out_csv: str = "monitoring/runs/milp_monitoring_table.csv",
     plan_csv: str = "monitoring/runs/milp_plan.csv",
-    n_steps: int | None = None,
-    offset: int = 0,
+    forecast_csv: str | None = None,
+    measures_csv: str | None = None,
+    n_steps: int | None = None,  # noqa: ARG001 — deprecated, kept for backward compat
+    offset: int = 0,  # noqa: ARG001 — deprecated, kept for backward compat
     show: bool = True,
 ):
     """End-to-end MILP example: solve + env-replay + dump + plot.
 
     Args:
         config_path: YAML config matching the env to build (same one used to
-            train the RL agent works fine — the MILP just reads `battery`,
-            `grid`, `time`, `pv`, `load` sections).
-        out_csv: where to dump the env-replayed monitoring table.
-        plan_csv: where to dump the MILP setpoint table.
-        n_steps: number of steps in the visualisation window. Defaults to 24h
-            (= ``24 × 60 / delta_t_min``) so daytime PV is visible — matches
-            the default in ``run_optimization_example.py``. Pass a smaller
-            value (e.g. ``env.horizon_steps`` for a 6h horizon view) to zoom.
-        offset: index of the first step to show (default 0). Shift forward to
-            frame any sub-window of the full MILP trajectory.
-        show: open the matplotlib windows.
+            train the RL agent works fine — the MILP just reads ``battery``,
+            ``grid``, ``time``, ``pv``, ``load`` sections).
+        out_csv: Where to dump the env-replayed monitoring table.
+        plan_csv: Where to dump the MILP setpoint table.
+        forecast_csv: Optional forecast CSV. Used as the env's deployment data
+            when ``measures_csv`` is None.
+        measures_csv: Optional measured-state CSV consumed by the env. Defaults
+            to ``forecast_csv`` (perfect foresight).
+        n_steps: Deprecated no-op. The MILP now solves the full trajectory and
+            both plots cover it entirely.
+        offset: Deprecated no-op (the visualisation window has been removed).
+        show: Open the matplotlib windows.
 
     Returns:
         ``(monitoring_df, milp_plan_df, replay_cost)`` — also written to the
         two CSV paths above.
     """
-    # ---- 1. build the test env -------------------------------------------
-    _, env, cfg = make_env(config_path)
+    deployment_csv = measures_csv if measures_csv is not None else forecast_csv
 
-    # ---- 2. solve the MILP over the full env horizon ---------------------
+    env, cfg = _build_deployment_env(config_path, deployment_csv)
+
     print(f"[1/4] Solving MILP (T = {env.max_steps} steps, "
           f"Δt = {env.delta_t_min} min)")
     metrics = run_milp(env, cfg)
@@ -114,7 +125,6 @@ def run(
     print(f"       solver status   = {metrics['solver_status']}")
     print(f"       objective value = {metrics['objective_value']:.4f} €")
 
-    # ---- 3. replay the MILP actions through the env ----------------------
     print("[2/4] Replaying MILP actions through the env")
     n_plan = len(hist["Pb_effective"])
     env.reset()
@@ -125,26 +135,37 @@ def run(
             env.max_discharge_kw,
         )
         _, _, terminated, truncated, _ = env.step(action)
+        # Overwrite the env-derived monitoring row with MILP-side columns so the
+        # CSV reflects the planner's intent, not the env-replay deviation, for
+        # economics/auxiliaries. The five base power columns stay from env.step.
+        mt = env.monitoring_table
+        if mt is not None and k < mt.n_steps:
+            mt.insert(
+                k,
+                {
+                    "pp":           float(hist["pv_t"][k]),
+                    "pl":           float(hist["load_t"][k]),
+                    "soc":          float(hist["soc"][k]) * 100.0,
+                    "pb":           float(hist["Pb_effective"][k]),
+                    "pg":           float(hist["P_grid"][k]),
+                    "p_imp":        float(hist["P_imp"][k]),
+                    "p_exp":        float(hist["P_exp"][k]),
+                    "price_imp":    float(hist["price_imp"][k]),
+                    "price_exp":    float(hist["price_exp"][k]),
+                    "r_eco":        float(hist["r_eco"][k]),
+                    "r_soc":        float(hist["r_soc"][k]),
+                    "reward":       float(hist["reward"][k]),
+                    "pb_charge":    float(hist["Pb_charge"][k]),
+                    "pb_discharge": float(hist["Pb_discharge"][k]),
+                    "b_int":        float(hist["b_int"][k]),
+                },
+            )
         if terminated or truncated:
             break
 
     monitoring_df = env.monitoring_table.to_dataframe().iloc[:n_plan]
     milp_plan_df = _build_milp_plan_df(hist, monitoring_df.index)
 
-    # ---- 4. choose visualisation window ----------------------------------
-    # Default to 24h (matches run_optimization_example.py) so daytime PV is
-    # visible. The first n_steps of the test dataset start at midnight, so
-    # the default 6h-from-start window we used previously fell entirely in
-    # pre-dawn (Pp = 0 everywhere). Users can still pass --steps 72 + an
-    # --offset to frame a tight 6h view of any part of the trajectory.
-    if n_steps is None:
-        n_steps = int(24 * 60 / env.delta_t_min)
-    offset = max(0, min(int(offset), n_plan - 1))
-    n_steps = max(1, min(int(n_steps), n_plan - offset))
-    monitoring_view = monitoring_df.iloc[offset : offset + n_steps]
-    milp_view = milp_plan_df.iloc[offset : offset + n_steps]
-
-    # ---- 5. persist both tables ------------------------------------------
     out_path = Path(out_csv)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     monitoring_df.to_csv(out_path)
@@ -164,23 +185,28 @@ def run(
           f"(MILP optimum = {metrics['objective_value']:.4f} €, "
           f"gap = {replay_cost - metrics['objective_value']:+.4f} €)")
 
-    # ---- 6. plot ---------------------------------------------------------
-    print(f"[4/4] Opening interactive plots ({n_steps} steps shown, "
-          f"offset={offset} — {monitoring_view.index[0]} → "
-          f"{monitoring_view.index[-1]} — close windows to exit)")
+    print(f"[4/4] Opening interactive plots ({n_plan} steps shown — "
+          f"{monitoring_df.index[0]} → {monitoring_df.index[-1]} — "
+          f"close windows to exit)")
     plot_power(
-        monitoring_view,
+        monitoring_df,
         delta_t_minutes=env.delta_t_min,
         cost=replay_cost,
         base_load_kw=cfg.get("load", {}).get("base_load_kw"),
         show=False,
     )
     plot_monitoring_milp(
-        monitoring_view,
-        milp_view,
+        monitoring_df,
+        milp_plan_df,
         delta_t_minutes=env.delta_t_min,
         soc_safe_min=env.soc_safe_min,
         soc_safe_max=env.soc_safe_max,
+        show=False,
+    )
+    plot_validation_milp(
+        monitoring_df,
+        milp_plan_df,
+        delta_t_minutes=env.delta_t_min,
         show=False,
     )
     if show:
@@ -193,17 +219,16 @@ def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--config", required=True,
                    help="YAML config (e.g. configs/exp01_perfect_foresight.yaml)")
+    p.add_argument("--forecast", default=None,
+                   help="Forecast CSV — also used as the env's deployment data "
+                        "when --measures is omitted.")
+    p.add_argument("--measures", default=None,
+                   help="Measured-state CSV consumed by the env step by step. "
+                        "Defaults to --forecast (perfect foresight).")
     p.add_argument("--out", default="monitoring/runs/milp_monitoring_table.csv",
                    help="CSV path for the env-replayed monitoring table")
     p.add_argument("--plan-out", default="monitoring/runs/milp_plan.csv",
                    help="CSV path for the MILP setpoint table")
-    p.add_argument("--steps", type=int, default=None,
-                   help="Visualisation window (steps). "
-                        "Default: 24h (= 24 × 60 / delta_t_min). "
-                        "Pass env.horizon_steps for a 6h horizon view.")
-    p.add_argument("--offset", type=int, default=0,
-                   help="Index of the first step to show (default 0). Use "
-                        "to skip nighttime or zoom into a specific period.")
     p.add_argument("--no-show", action="store_true",
                    help="Skip plt.show() — useful in CI or tests")
     args = p.parse_args()
@@ -212,8 +237,8 @@ def main():
         config_path=args.config,
         out_csv=args.out,
         plan_csv=args.plan_out,
-        n_steps=args.steps,
-        offset=args.offset,
+        forecast_csv=args.forecast,
+        measures_csv=args.measures,
         show=not args.no_show,
     )
 

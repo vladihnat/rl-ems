@@ -45,5 +45,11 @@ class LoadModel:
         end = min(step_index + 1 + horizon_steps, self.n_steps)
         forecast = self.load_profile[step_index + 1: end]
         if len(forecast) < horizon_steps:
-            forecast = np.pad(forecast, (0, horizon_steps - len(forecast)), mode="edge")
+            pad_val = float(forecast[-1]) if len(forecast) > 0 else float(
+                self.load_profile[min(step_index, self.n_steps - 1)]
+            )
+            forecast = np.pad(
+                forecast, (0, horizon_steps - len(forecast)),
+                mode="constant", constant_values=pad_val,
+            )
         return forecast.astype(np.float32)
