@@ -17,5 +17,6 @@ fi
 python -m monitoring.run_optimization_example \
     --config "$CONFIG" \
     --model "$MODEL" \
+    --forecast data/pyrano_simu.csv \
     --out "$OUT" \
     "$@"

@@ -2,9 +2,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-CONFIG="configs/exp02_variable_price.yaml"
-MODEL="results/exp02_variable_price/sac_model.zip"
-OUT="monitoring/runs/rl_exp02_monitoring_table.csv"
+CONFIG="configs/exp01_bis_perfect_foresight.yaml"
+MODEL="results/exp01_bis_perfect_foresight/sac_model.zip"
+OUT="monitoring/runs/rl_exp01_bis_monitoring_table.csv"
 
 cd "$ROOT"
 
@@ -17,6 +17,5 @@ fi
 python -m monitoring.run_optimization_example \
     --config "$CONFIG" \
     --model "$MODEL" \
-    --forecast data/pyrano_simu.csv \
     --out "$OUT" \
     "$@"

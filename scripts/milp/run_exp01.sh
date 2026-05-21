@@ -10,6 +10,7 @@ cd "$ROOT"
 
 python -m monitoring.run_milp_optimization_example \
     --config "$CONFIG" \
+    --forecast data/pyrano_simu.csv \
     --out "$OUT" \
     --plan-out "$PLAN_OUT" \
     "$@"

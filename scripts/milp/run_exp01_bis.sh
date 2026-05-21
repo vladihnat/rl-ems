@@ -2,9 +2,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-CONFIG="configs/exp02_variable_price.yaml"
-OUT="monitoring/runs/milp_exp02_monitoring_table.csv"
-PLAN_OUT="monitoring/runs/milp_exp02_plan.csv"
+CONFIG="configs/exp01_bis_perfect_foresight.yaml"
+OUT="monitoring/runs/milp_exp01_bis_monitoring_table.csv"
+PLAN_OUT="monitoring/runs/milp_exp01_bis_plan.csv"
 
 cd "$ROOT"
 
