@@ -1,7 +1,7 @@
-# Different from exp01_perfect_foresight.yaml:
-# - grid price_export is 0.10 instead of 0.15
+# Different from exp01_bis_perfect_foresight.yaml:
+# - gamma is 0.999 instead of 0.99
 experiment:
-  name: exp01_bis_perfect_foresight
+  name: exp01_bis_gamma
   seed: 42
 
 time:
@@ -52,5 +52,6 @@ training:
   learning_rate: 0.0003
   batch_size: 256
   buffer_size: 100000
+  gamma: 0.999                 # discount factor, close to 1 for long-term rewards
   train_split: 0.8             # fraction of DATES (not rows) for training
   split_method: temporal       # chronological, never random

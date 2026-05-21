@@ -37,6 +37,7 @@ def train_sac(env, config: dict):
         learning_rate=t_cfg["learning_rate"],
         batch_size=t_cfg["batch_size"],
         buffer_size=t_cfg["buffer_size"],
+        gamma=t_cfg.get("gamma", 0.99),
         seed=config["experiment"]["seed"],
         verbose=1,
     )
