@@ -9,13 +9,16 @@ duchaud-JL/
 results/
 tests/
 monitoring/runs/*
-
+scratch/ 
 # --- Fichiers exclus ---
 data/*old.csv
 data/test*
 data/pyrano_simu.csv
 explore_pymgrid25.py
 test_compat.py
+
+data/*.csv 
+rl_amelioration.md
 
 # --- Python bytecode / caches ---
 __pycache__/
