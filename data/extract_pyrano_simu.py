@@ -99,8 +99,10 @@ def main(argv: list[str] | None = None) -> int:
 
     start_str = window["Time"].iloc[0].strftime("%Y-%m-%d %H:%M")
     end_str = window["Time"].iloc[-1].strftime("%Y-%m-%d %H:%M")
+    max_global = window["Global30_kW"].max()
     print(
         f"Extracted {len(window)} rows | start: {start_str} | end: {end_str} "
+        f"| max Global30_kW: {max_global:.3f} kW "
         f"→ {TARGET_CSV.relative_to(Path.cwd()) if TARGET_CSV.is_relative_to(Path.cwd()) else TARGET_CSV}"
     )
     return 0
