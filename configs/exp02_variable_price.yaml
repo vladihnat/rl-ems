@@ -25,6 +25,7 @@ battery:
 grid:
   max_import_kw: 17.0
   max_export_kw: 17.0
+  curtailment: clip
   # Sinusoidal import price: base_import + amplitude * sin(2π * hour / period_h)
   # Mirrors Duchaud-JL: fun_prix_reseau = (5 + sin(t)) for import, 1 for export
   # At noon (hour=6, peak): 0.15 + 0.05 = 0.20 EUR/kWh

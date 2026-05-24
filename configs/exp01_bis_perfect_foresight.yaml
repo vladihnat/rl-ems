@@ -30,6 +30,7 @@ grid:
   max_export_kw: 17.0
   price_import: 0.15           # EUR/kWh -- fixed for exp01
   price_export: 0.10           # EUR/kWh -- equal to import for exp01
+  curtailment: clip
 
 load:
   type: fixed                  # fixed sinusoidal load from Matlab: abs(sin(t)) * 1e3 W

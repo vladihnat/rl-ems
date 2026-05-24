@@ -1171,4 +1171,236 @@ Monitoring enhancement — columns, validation, plots
       existing call sites (e.g. `experiments/run_experiment.py`) do not break.
     - Do not touch `envs/`, `agents/`, `baselines/`, or `evaluation/` — this
       task is strictly limited to `data/`, `monitoring/`, and `scripts/`.
-    
+
+
+# Correction Bug #2 : curtailment PV explicite
+
+    ## ⚠️ ENVIRONNEMENT D'EXÉCUTION (RÈGLE ABSOLUE)
+
+    **TOUTE** exécution Python (imports, scripts de vérification, MILP, rollouts, tests)
+    doit se faire **exclusivement** dans l'environnement micromamba `stageCorse`, via :
+
+    ```bash
+    micromamba run -n stageCorse python <...>
+    ```
+
+    Il est **INTERDIT** d'utiliser ou de créer un autre environnement : pas de `venv`,
+    pas de `conda base`, pas de `python` système, pas de `pip install` ailleurs.
+    L'environnement `stageCorse` **existe déjà** — ne le recrée pas, ne le vérifie pas,
+    n'installe rien de nouveau. Si une commande Python est lancée hors de
+    `micromamba run -n stageCorse`, c'est une erreur.
+
+    ---
+
+    ## Contexte du bug
+
+    Le bilan de puissance peut être physiquement violé quand le surplus PV dépasse la
+    limite d'export et que la batterie ne peut plus absorber :
+
+    - **Côté env** (`envs/base_microgrid_env.py`) : `P_grid = clip(Pl − Pp − Pb, …)` est
+      un *fail-soft* qui fait disparaître silencieusement l'excès (résidu Kirchhoff ≠ 0).
+    - **Côté MILP** (`baselines/milp_solver.py`) : l'égalité `Pg == Pl − Pp − Pb` couplée
+      à `P_exp ≤ max_exp` rend le problème **infaisable** (*fail-hard*, `RuntimeError`)
+      dès qu'un step exige `−(Pp − Pl + Pb) > max_exp`.
+
+    Remède commun : introduire une variable explicite de **curtailment PV** `Pcurt ≥ 0`,
+    de sens physique direct (l'onduleur écrête le PV).
+
+    ## Formule de curtailment (⚠️ attention au signe)
+
+    `P_grid_raw = load − pv − Pb_effective` (bilan non borné ; `< 0` ⇒ surplus à exporter).
+
+    ```
+    Pcurt = max(0, pv + Pb_effective − load − max_export)
+          = max(0, −P_grid_raw − max_export)
+    ```
+
+    **Propriété clé à exploiter pour un code propre :**
+    `clip(P_grid_raw + Pcurt, −max_export, max_import) ≡ clip(P_grid_raw, −max_export, max_import)`.
+    Donc `P_grid` et `r_eco` sont **identiques** dans les deux modes ; seul `r_curt`
+    diffère. C'est une ablation propre (différence uniquement dans la reward).
+
+    ## Deux modes pour l'agent RL (nouvelle option de config)
+
+    Nouvelle clé `grid.curtailment` ∈ `{"clip", "penal"}`, défaut `"clip"` :
+
+    - **`clip`** : revenu d'export naturellement plafonné par le clip
+      (`revenu = price_export × max_export × Δt`). Pas de terme de reward supplémentaire.
+      Numériquement identique au comportement actuel côté export, mais `Pcurt` est
+      désormais **calculé et tracé**.
+    - **`penal`** : même `P_grid` / `r_eco` que `clip`, plus une pénalité explicite
+      `r_curt = −price_export × Pcurt × Δt` ajoutée à la reward (l'énergie gaspillée
+      coûte autant qu'un kWh non vendu). Pas de double comptage : `r_eco` est déjà capé
+      par le clip ; `r_curt` pénalise l'énergie *au-delà* du cap.
+
+    Le MILP n'a **pas** de mode : il utilise toujours la variable `Pcurt` explicite,
+    objectif inchangé (le curtailment est « gratuit » dans l'objectif et ne s'active que
+    pour la faisabilité — c'est la référence optimale).
+
+    ---
+
+    ## MODIFICATIONS REQUISES
+
+    ### 1. `monitoring/monitoring_table.py`
+    - Ajouter une constante `COL_PCURT` **à la fin** des indices de colonnes (après
+      `COL_PB_COMMAND = 17`, donc `COL_PCURT = 18`). **Ne pas** insérer au milieu :
+      renuméroter les 12 constantes existantes serait risqué. L'ordre CSV légèrement
+      non-canonique (colonne partagée placée après les colonnes RL-only) est un coût
+      cosmétique acceptable.
+    - Ajouter `"Pcurt"` à la fin de `COLUMN_NAMES` (cohérent avec l'indice 18).
+      `NUM_COLUMNS` se met à jour automatiquement.
+    - Ajouter `"pcurt": COL_PCURT` dans `_OPTIONAL_KEYS` (curtailment = colonne optionnelle,
+      NaN si absente — **ne pas** la mettre dans `_REQUIRED_KEYS`).
+    - Mettre à jour le docstring de tête (le compte de colonnes est déjà périmé) :
+      documenter `Pcurt [kW, ≥0]` comme colonne partagée.
+
+    ### 2. `envs/base_microgrid_env.py`
+    - Dans `__init__`, lire et valider le mode :
+      ```python
+      self.curtailment_mode = config["grid"].get("curtailment", "clip")
+      if self.curtailment_mode not in ("clip", "penal"):
+          raise ValueError(
+              f"Unknown grid.curtailment={self.curtailment_mode!r}; use 'clip' or 'penal'."
+          )
+      ```
+    - Dans `step()`, remplacer le bloc bilan/reward actuel par :
+      ```python
+      # Bilan brut (non borné). P_grid_raw < 0 ⇒ surplus à exporter.
+      P_grid_raw = load_t - pv_t - Pb_effective
+
+      # Curtailment PV côté export : l'onduleur écrête le PV quand le surplus
+      # dépasse la limite d'export et que la batterie ne peut plus absorber.
+      # Signe : Pcurt = max(0, pv + Pb − load − max_export) = max(0, −P_grid_raw − max_export)
+      Pcurt = max(0.0, -P_grid_raw - self.max_export_kw)
+
+      # Côté import : vraie limite réseau (charge non satisfaite), conservée en clip.
+      P_grid = float(np.clip(P_grid_raw, -self.max_export_kw, self.max_import_kw))
+
+      price_imp = self.price_signal.get_import_price(self.step_index)
+      price_exp = self.price_signal.get_export_price(self.step_index)
+      r_eco = -(
+          price_imp * max(P_grid, 0.0)
+          - price_exp * max(-P_grid, 0.0)
+      ) * self.delta_t_h
+
+      r_soc = -self.sigma_soc * (
+          max(0.0, self.soc_safe_min - new_soc)
+          + max(0.0, new_soc - self.soc_safe_max)
+      )
+
+      # "clip" : revenu naturellement capé (aucun terme additionnel).
+      # "penal" : pénalise en plus le PV gaspillé au prix d'export.
+      if self.curtailment_mode == "penal":
+          r_curt = -price_exp * Pcurt * self.delta_t_h
+      else:  # "clip"
+          r_curt = 0.0
+
+      reward = r_eco + r_soc + r_curt
+      ```
+    - Dans l'appel `self.monitoring_table.insert(...)`, ajouter la clé `"pcurt": float(Pcurt),`.
+      La colonne `reward` insérée doit refléter le total **incluant `r_curt`** (c'est déjà
+      le cas si on insère la variable `reward` ci-dessus).
+    - Ajouter `"Pcurt": Pcurt,` au dict `info` retourné par `step()`.
+
+    ### 3. `baselines/milp_solver.py`
+    - Ajouter la variable et corriger le bilan :
+      ```python
+      Pb = cp.Variable(T)
+      Pg = cp.Variable(T)
+      P_imp = cp.Variable(T, nonneg=True)
+      P_exp = cp.Variable(T, nonneg=True)
+      Pcurt = cp.Variable(T, nonneg=True)   # NEW : curtailment PV explicite
+      soc = cp.Variable(T + 1)
+
+      constraints = []
+      constraints.append(soc[0] == init_soc)
+
+      for t in range(T):
+          # bilan corrigé : Pp_used = pv − Pcurt
+          constraints.append(Pg[t] == load_vals[t] - (pv_vals[t] - Pcurt[t]) - Pb[t])
+          constraints.append(Pg[t] == P_imp[t] - P_exp[t])
+          constraints.append(Pcurt[t] <= pv_vals[t])   # pas plus que le PV disponible
+      ```
+    - **Objectif inchangé** (`minimize cost_import − revenue_export`).
+    - Ajouter dans le dict `history` : `"Pcurt": np.asarray(Pcurt.value, dtype=np.float64),`.
+
+    ### 4. `monitoring/run_milp_optimization_example.py`
+    - Dans le `mt.insert(k, {...})` qui réécrit les colonnes côté MILP, ajouter :
+      `"pcurt": float(hist["Pcurt"][k]),` pour que le CSV env-replay reflète le
+      curtailment planifié par le MILP.
+
+    ### 5. Configs (`configs/`)
+    - Ajouter explicitement la ligne `curtailment: clip` dans la section `grid:` de
+      **tous** les configs existants (`exp01_perfect_foresight.yaml`,
+      `exp01_bis_perfect_foresight.yaml`, `exp01_bis_gamma.yaml`,
+      `exp02_variable_price.yaml`) — pour rendre l'option visible/explicite.
+    - Créer **au moins un config jumeau** pour la comparaison, p. ex.
+      `configs/exp02_curtail_penal.yaml` = copie de `exp02_variable_price.yaml` avec
+      `experiment.name: exp02_curtail_penal` et `grid.curtailment: penal`.
+
+    ---
+
+    ## MODIFICATIONS OPTIONNELLES (clairement séparées, ne pas casser le défaut)
+
+    - **`Pcurt` dans l'observation** : ajouter une clé `grid.observe_curtailment`
+      (défaut `false`). Quand `true`, appliquer **identiquement aux deux modes** (pour garder
+      l'ablation propre) : initialiser `self._last_pcurt = 0.0` dans `reset()`, l'ajouter à la
+      fin du vecteur d'obs dans `_get_obs()`, mettre à jour `self._last_pcurt = float(Pcurt)`
+      en fin de `step()`, et incrémenter `obs_dim` de 1 dans `__init__`. ⚠️ Cela change
+      `obs_dim` et **impose un ré-entraînement** ; laisser le défaut `false` pour rester
+      rétro-compatible avec les modèles `.zip` existants.
+    - **Métrique de curtailment** : optionnellement, enregistrer `info["Pcurt"]` dans
+      `history` côté `agents/sac_agent.py::evaluate_sac` et ajouter
+      `energy_curtailed_kwh = sum(Pcurt) * delta_t_h` dans `evaluation/metrics.py`.
+
+    ---
+
+    ## CONVENTIONS À RESPECTER (ne pas casser)
+
+    - Convention de signe inchangée : `Pb > 0` = décharge, `Pb < 0` = charge ;
+      `Pg > 0` = import, `Pg < 0` = export.
+    - **Ne pas renommer** `PVSource.get_irradiance` (convention imposée par le superviseur).
+    - `Pcurt ≥ 0` et `Pcurt ≤ Pp` en permanence.
+    - En mode `clip`, `r_curt = 0` ; le défaut `clip` doit rester numériquement identique
+      au comportement actuel côté export (modèles existants encore exploitables en inférence).
+
+    ---
+
+    ## VÉRIFICATIONS À EXÉCUTER (toutes dans `stageCorse`)
+
+    1. Imports sans erreur :
+      ```bash
+      micromamba run -n stageCorse python -c "import envs, baselines, monitoring, evaluation"
+      ```
+    2. Self-test batterie existant toujours vert :
+      ```bash
+      micromamba run -n stageCorse python -m envs.components.battery
+      ```
+    3. Écrire `scratch/verify_curtailment.py` et l'exécuter :
+      ```bash
+      micromamba run -n stageCorse python scratch/verify_curtailment.py
+      ```
+      Ce script doit (sans nouvelle donnée : forcer le régime en abaissant
+      `grid.max_export_kw`, p. ex. à `0.5`, sur le config exp01 chargé puis modifié
+      en mémoire, et/ou en injectant un step à fort PV) **asserter** :
+      - **Bilan corrigé** sur tous les steps d'un rollout :
+        `abs((Pl − (Pp − Pcurt) − Pb) − Pg) ≤ 1e-6` (résidu nul, plus de fuite silencieuse).
+      - `Pcurt ≥ 0` et `Pcurt ≤ Pp` partout.
+      - **Égalité clip ≡ penal** sur `P_grid` et `r_eco` step par step, et
+        `reward_penal ≤ reward_clip` (strictement inférieure dès que `Pcurt > 0`),
+        l'écart valant exactement `price_export × Pcurt × Δt`.
+      - **MILP faisable** sur le cas stressé (`max_export` faible) :
+        `run_milp(...)["solver_status"] in ("optimal", "optimal_inaccurate")`,
+        aucun `RuntimeError`, et `Pcurt` MILP `≥ 0`, `≤ pv_vals`.
+      - La `MonitoringTable` expose bien la colonne `Pcurt` après `to_dataframe()`.
+
+    Ne considérer la tâche terminée que si toutes les assertions passent **dans
+    `micromamba run -n stageCorse`**.
+
+    ---
+
+    ## RAPPEL FINAL
+
+    Toutes les commandes Python passent par `micromamba run -n stageCorse python ...`.
+    Aucun autre environnement n'est autorisé. `stageCorse` existe déjà — ne pas le créer
+    ni le vérifier.

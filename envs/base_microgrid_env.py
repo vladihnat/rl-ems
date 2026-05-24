@@ -42,6 +42,12 @@ class MicrogridEnv(gym.Env):
         self.max_import_kw = config["grid"]["max_import_kw"]
         self.max_export_kw = config["grid"]["max_export_kw"]
 
+        self.curtailment_mode = config["grid"].get("curtailment", "clip")
+        if self.curtailment_mode not in ("clip", "penal"):
+            raise ValueError(
+                f"Unknown grid.curtailment={self.curtailment_mode!r}; use 'clip' or 'penal'."
+            )
+
         self.sigma_soc = config["reward"]["sigma_soc"]
         self.soc_safe_min = config["reward"]["soc_safe_min"]
         self.soc_safe_max = config["reward"]["soc_safe_max"]
@@ -113,8 +119,14 @@ class MicrogridEnv(gym.Env):
         pv_t = self.pv.get_irradiance(self.step_index)
         load_t = self.load.get_load(self.step_index)
 
-        P_grid = load_t - pv_t - Pb_effective
-        P_grid = np.clip(P_grid, -self.max_export_kw, self.max_import_kw)
+        # Bilan brut (non borné). P_grid_raw < 0 ⇒ surplus à exporter.
+        P_grid_raw = load_t - pv_t - Pb_effective
+
+        # Curtailment PV côté export : l'onduleur écrête le PV quand le surplus
+        # dépasse la limite d'export et que la batterie ne peut plus absorber.
+        Pcurt = max(0.0, -P_grid_raw - self.max_export_kw)
+
+        P_grid = float(np.clip(P_grid_raw, -self.max_export_kw, self.max_import_kw))
 
         price_imp = self.price_signal.get_import_price(self.step_index)
         price_exp = self.price_signal.get_export_price(self.step_index)
@@ -128,7 +140,12 @@ class MicrogridEnv(gym.Env):
             + max(0.0, new_soc - self.soc_safe_max)
         )
 
-        reward = r_eco + r_soc
+        if self.curtailment_mode == "penal":
+            r_curt = -price_exp * Pcurt * self.delta_t_h
+        else:  # "clip"
+            r_curt = 0.0
+
+        reward = r_eco + r_soc + r_curt
 
         # Record this decision step in the monitoring buffer BEFORE incrementing
         # step_index, so row k contains the action+state at decision step k.
@@ -152,6 +169,7 @@ class MicrogridEnv(gym.Env):
                     "r_eco":     float(r_eco),
                     "r_soc":     float(r_soc),
                     "reward":    float(reward),
+                    "pcurt":     float(Pcurt),
                 },
             )
 
@@ -165,6 +183,7 @@ class MicrogridEnv(gym.Env):
             "soc": new_soc,
             "r_eco": r_eco,
             "r_soc": r_soc,
+            "Pcurt": Pcurt,
             "pv_t": pv_t,
             "load_t": load_t,
             "price_import": price_imp,

@@ -37,6 +37,7 @@ def run_milp(env, config: dict) -> dict:
     Pg = cp.Variable(T)
     P_imp = cp.Variable(T, nonneg=True)
     P_exp = cp.Variable(T, nonneg=True)
+    Pcurt = cp.Variable(T, nonneg=True)  # curtailment PV explicite
     soc = cp.Variable(T + 1)
 
     constraints = []
@@ -44,8 +45,10 @@ def run_milp(env, config: dict) -> dict:
     constraints.append(soc[0] == init_soc)
 
     for t in range(T):
-        constraints.append(Pg[t] == load_vals[t] - pv_vals[t] - Pb[t])
+        # bilan corrigé : Pp_used = pv − Pcurt
+        constraints.append(Pg[t] == load_vals[t] - (pv_vals[t] - Pcurt[t]) - Pb[t])
         constraints.append(Pg[t] == P_imp[t] - P_exp[t])
+        constraints.append(Pcurt[t] <= pv_vals[t])
 
     constraints.append(Pb >= -max_charge)
     constraints.append(Pb <= max_discharge)
@@ -107,6 +110,7 @@ def run_milp(env, config: dict) -> dict:
         "P_exp": P_exp_sol,
         "price_imp": np.asarray(price_imp, dtype=np.float64),
         "price_exp": np.asarray(price_exp, dtype=np.float64),
+        "Pcurt": np.asarray(Pcurt.value, dtype=np.float64),
     }
 
     metrics = compute_metrics(history, delta_t_h, soc_min, soc_max, price_imp, price_exp)

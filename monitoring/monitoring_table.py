@@ -4,7 +4,7 @@ Python port of the MATLAB `MicroGrid.Monitoring` matrix and `monitoTable`
 dependent property. One row per RL decision step; the row is written
 (indexed) at the moment the agent acts on the env.
 
-Column layout (extended schema, 16 columns):
+Column layout (extended schema, 19 columns):
     SHARED (always populated by RL or MILP rollouts):
         t          unix seconds (float64)
         Pp         PV production [kW], >= 0
@@ -19,6 +19,8 @@ Column layout (extended schema, 16 columns):
         r_eco      instantaneous economic reward [€]
         r_soc      SoC penalty (0 when no violation)
         reward     total step reward = r_eco + r_soc
+        Pcurt      PV curtailment [kW, >=0] — power shed by inverter when
+                   surplus exceeds max_export and battery is saturated
 
     MILP-ONLY (NaN for RL rollouts):
         Pb_charge      auxiliary charging magnitude [kW, >=0]
@@ -71,6 +73,8 @@ COL_B_INT        = 15
 # RL-only columns
 COL_ACTION_RAW   = 16
 COL_PB_COMMAND   = 17
+# Shared curtailment column (appended last to avoid renumbering above)
+COL_PCURT        = 18
 
 COLUMN_NAMES = [
     "t",
@@ -80,6 +84,7 @@ COLUMN_NAMES = [
     "r_eco", "r_soc", "reward",
     "Pb_charge", "Pb_discharge", "b_int",
     "action_raw", "Pb_command",
+    "Pcurt",
 ]
 NUM_COLUMNS = len(COLUMN_NAMES)
 
@@ -101,6 +106,7 @@ _OPTIONAL_KEYS = {
     "b_int":        COL_B_INT,
     "action_raw":   COL_ACTION_RAW,
     "pb_command":   COL_PB_COMMAND,
+    "pcurt":        COL_PCURT,
 }
 
 

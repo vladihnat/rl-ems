@@ -158,6 +158,7 @@ def run(
                     "pb_charge":    float(hist["Pb_charge"][k]),
                     "pb_discharge": float(hist["Pb_discharge"][k]),
                     "b_int":        float(hist["b_int"][k]),
+                    "pcurt":        float(hist["Pcurt"][k]),
                 },
             )
         if terminated or truncated:
