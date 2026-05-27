@@ -55,8 +55,14 @@ class MicrogridEnv(gym.Env):
         self.max_charge_kw = config["battery"]["max_charge_kw"]
         self.max_discharge_kw = config["battery"]["max_discharge_kw"]
 
+        self._load_forecast_in_obs = config.get("observation", {}).get("load_forecast", False)
+        self._spread_penalty = config["reward"].get("spread_penalty", False)
+        self._sigma_bat = config["reward"].get("sigma_bat", 0.0)
+        self._pb_max = max(self.max_charge_kw, self.max_discharge_kw)
+
         price_forecast_dim = self.horizon_steps if self.price_signal.has_forecast else 0
-        obs_dim = 9 + self.horizon_steps + price_forecast_dim
+        load_forecast_dim = self.horizon_steps if self._load_forecast_in_obs else 0
+        obs_dim = 9 + self.horizon_steps + load_forecast_dim + price_forecast_dim
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
         )
@@ -86,6 +92,8 @@ class MicrogridEnv(gym.Env):
             np.array([pv_t], dtype=np.float32),
             pv_forecast,
         ]
+        if self._load_forecast_in_obs:
+            parts.append(self.load.get_forecast(self.step_index, self.horizon_steps))
         if self.price_signal.has_forecast:
             parts.append(self.price_signal.get_import_forecast(self.step_index, self.horizon_steps))
 
@@ -145,7 +153,17 @@ class MicrogridEnv(gym.Env):
         else:  # "clip"
             r_curt = 0.0
 
-        reward = r_eco + r_soc + r_curt
+        r_bat_power = -self._sigma_bat * (Pb_effective / self._pb_max) ** 2
+
+        r_spread = 0.0
+        if self._spread_penalty:
+            pv_surplus = max(0.0, pv_t - load_t)
+            if Pb_effective > 0.0 and pv_surplus > 0.0:
+                r_spread = -(price_imp - price_exp) * min(Pb_effective, pv_surplus) * self.delta_t_h
+
+        reward = r_eco + r_soc + r_curt + r_bat_power + r_spread
+
+        # reward = r_eco + r_soc + r_curt
 
         # Record this decision step in the monitoring buffer BEFORE incrementing
         # step_index, so row k contains the action+state at decision step k.
@@ -168,6 +186,8 @@ class MicrogridEnv(gym.Env):
                     "price_exp": float(price_exp),
                     "r_eco":     float(r_eco),
                     "r_soc":     float(r_soc),
+                    "r_bat_power": float(r_bat_power),
+                    "r_spread":  float(r_spread),
                     "reward":    float(reward),
                     "pcurt":     float(Pcurt),
                 },
@@ -183,6 +203,8 @@ class MicrogridEnv(gym.Env):
             "soc": new_soc,
             "r_eco": r_eco,
             "r_soc": r_soc,
+            "r_bat_power": r_bat_power,
+            "r_spread": r_spread,
             "Pcurt": Pcurt,
             "pv_t": pv_t,
             "load_t": load_t,

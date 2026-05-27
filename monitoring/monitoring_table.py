@@ -18,7 +18,9 @@ Column layout (extended schema, 19 columns):
         price_exp  export price at this step [€/kWh]
         r_eco      instantaneous economic reward [€]
         r_soc      SoC penalty (0 when no violation)
-        reward     total step reward = r_eco + r_soc
+        r_bat_power  quadratic battery power penalty = -sigma_bat * (Pb/Pb_max)² (0 when sigma_bat = 0)
+        r_spread   spread penalty on useless discharge (0 when spread_penalty=False)
+        reward     total step reward = r_eco + r_soc + r_curt + r_bat_power + r_spread
         Pcurt      PV curtailment [kW, >=0] — power shed by inverter when
                    surplus exceeds max_export and battery is saturated
 
@@ -75,6 +77,9 @@ COL_ACTION_RAW   = 16
 COL_PB_COMMAND   = 17
 # Shared curtailment column (appended last to avoid renumbering above)
 COL_PCURT        = 18
+# New reward components (appended last to avoid renumbering above)
+COL_R_BAT_POWER  = 19
+COL_R_SPREAD     = 20
 
 COLUMN_NAMES = [
     "t",
@@ -85,6 +90,7 @@ COLUMN_NAMES = [
     "Pb_charge", "Pb_discharge", "b_int",
     "action_raw", "Pb_command",
     "Pcurt",
+    "r_bat_power", "r_spread",
 ]
 NUM_COLUMNS = len(COLUMN_NAMES)
 
@@ -107,6 +113,8 @@ _OPTIONAL_KEYS = {
     "action_raw":   COL_ACTION_RAW,
     "pb_command":   COL_PB_COMMAND,
     "pcurt":        COL_PCURT,
+    "r_bat_power":  COL_R_BAT_POWER,
+    "r_spread":     COL_R_SPREAD,
 }
 
 

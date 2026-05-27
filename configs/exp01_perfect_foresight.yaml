@@ -21,7 +21,6 @@ battery:
   efficiency_charge: 0.9
   efficiency_discharge: 0.9
   init_soc: 0.5
-  cost_cycle: 0.02
 
 grid:
   max_import_kw: 17.0          # limited by inverter Pmax

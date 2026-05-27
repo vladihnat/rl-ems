@@ -18,10 +18,6 @@ class BatteryModel:
         self.eta_charge = cfg["efficiency_charge"]
         self.eta_discharge = cfg["efficiency_discharge"]
         self.init_soc = cfg["init_soc"]
-        # cost_cycle c'est le prix en euro par kWh de cycle de batterie (charge/décharge).
-        # Variable non utilisée dans l'environnement de base, mais peut être intégrée
-        # dans la fonction de récompense pour pénaliser l'usure liée aux cycles de batterie 
-        self.cost_cycle = cfg["cost_cycle"]
         self.soc = self.init_soc
 
     def reset(self):
@@ -75,7 +71,6 @@ if __name__ == "__main__":
         "efficiency_charge": 0.9,
         "efficiency_discharge": 0.9,
         "init_soc": 0.5,
-        "cost_cycle": 0.02,
     }
     bat = BatteryModel(cfg)
 
