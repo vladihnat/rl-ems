@@ -1,0 +1,60 @@
+experiment:
+  name: exp07_randSoC_300Bs_g99
+  seed: 42
+
+time:
+  delta_t_min: 5
+  horizon_h: 6
+
+data:
+  pv_csv: "data/clean/Pyrano1w_clean.csv"
+  pv_column: "Global30_kW"
+
+observation: 
+  load_forecast: true
+
+battery:
+  capacity_kwh: 24.0
+  soc_min: 0.2
+  soc_max: 0.9
+  max_charge_kw: 7.0
+  max_discharge_kw: 7.0
+  efficiency_charge: 0.9
+  efficiency_discharge: 0.9
+  init_soc: 0.5
+
+grid:
+  max_import_kw: 17.0
+  max_export_kw: 17.0
+  price_import: 0.15
+  price_export: 0.10
+  curtailment: clip
+
+load:
+  type: fixed
+  base_load_kw: 1.0
+
+pv:
+  type: perfect
+  surface_m2: 91.32
+  eta_ref: 0.24
+
+reward:
+  sigma_soc: 10.0
+  soc_safe_min: 0.2
+  soc_safe_max: 0.9
+  spread_penalty: true
+  sigma_bat: 0.01 
+
+training:
+  algorithm: SAC
+  total_timesteps: 1000000
+  learning_rate: 0.0003
+  batch_size: 256
+  buffer_size: 300_000
+  gamma: 0.99
+  train_split: 0.8
+  split_method: temporal
+  random_soc:  false
+  norm_obs:    false
+  norm_reward: false

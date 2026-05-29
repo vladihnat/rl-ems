@@ -3,6 +3,7 @@
 import numpy as np
 from stable_baselines3 import SAC
 from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from evaluation.metrics import compute_metrics
 
@@ -27,13 +28,23 @@ def train_sac(env, config: dict):
     """Train a SAC agent on the given environment.
 
     Returns:
-        (model, episode_rewards): trained SB3 model and list of episode rewards.
+        (model, episode_rewards, vec_env): trained SB3 model, list of episode rewards,
+        and the VecNormalize wrapper (or None if norm_obs/norm_reward are both False).
     """
     t_cfg = config["training"]
+    norm_obs    = t_cfg.get("norm_obs",    False)
+    norm_reward = t_cfg.get("norm_reward", False)
+
+    if norm_obs or norm_reward:
+        vec_env   = VecNormalize(DummyVecEnv([lambda: env]), norm_obs=norm_obs, norm_reward=norm_reward)
+        train_env = vec_env
+    else:
+        vec_env   = None
+        train_env = env
 
     model = SAC(
         "MlpPolicy",
-        env,
+        train_env,
         learning_rate=t_cfg["learning_rate"],
         batch_size=t_cfg["batch_size"],
         buffer_size=t_cfg["buffer_size"],
@@ -45,16 +56,23 @@ def train_sac(env, config: dict):
     callback = RewardLoggerCallback()
     model.learn(total_timesteps=t_cfg["total_timesteps"], callback=callback)
 
-    return model, callback.episode_rewards
+    return model, callback.episode_rewards, vec_env
 
 
-def evaluate_sac(model, env) -> dict:
+def evaluate_sac(model, env, vec_normalize=None) -> dict:
     """Run the trained policy on an environment and return metrics.
+
+    Args:
+        vec_normalize: optional VecNormalize (in eval mode) used to normalise
+            observations before feeding them to the model. The raw Gymnasium env
+            is still used for stepping and attribute access.
 
     Returns:
         dict with episode history and computed metrics.
     """
     obs, _ = env.reset()
+    if vec_normalize is not None:
+        obs = vec_normalize.normalize_obs(obs)
     history = {
         "P_grid": [],
         "Pb_effective": [],
@@ -70,6 +88,8 @@ def evaluate_sac(model, env) -> dict:
     while not done:
         action, _ = model.predict(obs, deterministic=True)
         obs, reward, terminated, truncated, info = env.step(action)
+        if vec_normalize is not None:
+            obs = vec_normalize.normalize_obs(obs)
         done = terminated or truncated
 
         history["P_grid"].append(info["P_grid"])

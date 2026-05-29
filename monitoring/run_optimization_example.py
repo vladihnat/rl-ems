@@ -7,11 +7,15 @@ interactive matplotlib windows.
 
 Usage:
     python -m monitoring.run_optimization_example \
-        --config configs/exp01_perfect_foresight.yaml \
-        --model  results/exp01_perfect_foresight/sac_model.zip \
-        --forecast data/pyrano_simu.csv \
-        [--measures data/pyrano_simu.csv] \
-        --out monitoring/runs/rl_exp01_monitoring_table.csv
+        --config configs/exp08_realLoad.yaml \
+        --model  results/exp08_realLoad_300Bs_g99/sac_model.zip \
+        --forecast data/irradiance_simulation.csv \
+        [--measures data/irradiance_simulation.csv] \
+        [--load-csv data/load_simulation.csv] \
+        --out monitoring/runs/exp08_monitoring_table.csv
+
+Generate simulation data first:
+    python data/extract_pyrano_simu.py --nbD 7 --month 2 --startDate 1 --usage simu
 
 Deployment semantics:
     * ``--measures`` is the ground-truth measured PV / load / prices that the
@@ -20,6 +24,8 @@ Deployment semantics:
     * ``--forecast`` is what the agent reads as predicted future values
       (overlaid on the comparison plot). If omitted, the env's own perfect-
       foresight values are used.
+    * ``--load-csv`` overrides the load CSV for deployment (real-load configs
+      only). When omitted the config's ``data.load_csv`` is used unchanged.
 
 Variable-name mapping between RL code and MATLAB conventions:
     RL code              MATLAB / monitoTable
@@ -70,7 +76,11 @@ def _load_model(model_path: str, algo: str):
     raise ValueError(f"Unknown algorithm {algo!r}; extend _load_model() to support it.")
 
 
-def _build_deployment_env(config_path: str, deployment_csv: str | None):
+def _build_deployment_env(
+    config_path: str,
+    deployment_csv: str | None,
+    deployment_load_csv: str | None = None,
+):
     """Build a single MicrogridEnv consuming the deployment CSV end-to-end.
 
     Unlike ``envs.registry.make_env`` (which produces a train/test split), the
@@ -79,8 +89,11 @@ def _build_deployment_env(config_path: str, deployment_csv: str | None):
 
     Args:
         config_path: YAML config matching the trained model.
-        deployment_csv: Optional path to the CSV the env should consume. When
-            None, falls back to ``cfg["data"]["pv_csv"]``.
+        deployment_csv: Optional path to the PV CSV the env should consume.
+            When None, falls back to ``cfg["data"]["pv_csv"]``.
+        deployment_load_csv: Optional path to the load CSV for deployment.
+            When None, falls back to ``cfg["data"]["load_csv"]`` (real-load
+            configs) or the synthetic generator (fixed-load configs).
 
     Returns:
         (env, cfg) — a fresh MicrogridEnv plus the resolved config dict.
@@ -90,10 +103,13 @@ def _build_deployment_env(config_path: str, deployment_csv: str | None):
 
     if deployment_csv is not None:
         cfg["data"]["pv_csv"] = str(deployment_csv)
+    if deployment_load_csv is not None:
+        cfg["data"]["load_csv"] = str(deployment_load_csv)
 
     pv = PVSource(cfg["pv"], cfg["data"])
     load = LoadModel(
         cfg["load"],
+        cfg["data"],
         n_steps=pv.n_steps,
         delta_t_min=cfg["time"]["delta_t_min"],
         timestamps=pv.timestamps,
@@ -152,6 +168,7 @@ def run(
     forecast_csv: str | None = None,
     out_csv: str = "monitoring/runs/monitoring_table.csv",
     measures_csv: str | None = None,
+    load_csv: str | None = None,
     n_steps: int | None = None,  # noqa: ARG001 — deprecated, kept for backward compat
     deterministic: bool = True,
     show: bool = True,
@@ -167,6 +184,9 @@ def run(
         measures_csv: Optional measured-state CSV consumed by the env step by
             step. Defaults to ``forecast_csv`` (perfect foresight). If neither
             is given, the env uses ``cfg["data"]["pv_csv"]`` unchanged.
+        load_csv: Optional deployment load CSV (real-load configs). Overrides
+            ``cfg["data"]["load_csv"]`` so simulation and training data stay
+            separate. Ignored for fixed/synthetic load configs.
         n_steps: Deprecated no-op. The rollout now spans the full deployment
             data; the visualisation window has been removed.
         deterministic: Pass-through to model.predict().
@@ -177,7 +197,7 @@ def run(
     """
     deployment_csv = measures_csv if measures_csv is not None else forecast_csv
 
-    env, cfg = _build_deployment_env(config_path, deployment_csv)
+    env, cfg = _build_deployment_env(config_path, deployment_csv, load_csv)
 
     algo = cfg["training"]["algorithm"]
     print(f"[1/4] Loading {algo} model from {model_path}")
@@ -241,6 +261,10 @@ def main():
     p.add_argument("--measures", default=None,
                    help="Measured-state CSV consumed by the env step by step. "
                         "Defaults to --forecast (perfect foresight).")
+    p.add_argument("--load-csv", default=None,
+                   help="Deployment load CSV (real-load configs). Overrides the "
+                        "config's data.load_csv so simulation data stays separate "
+                        "from training data. Typically data/load_simulation.csv.")
     p.add_argument("--out", default="monitoring/runs/monitoring_table.csv",
                    help="Destination CSV for the monitoring table")
     args = p.parse_args()
@@ -250,6 +274,7 @@ def main():
         model_path=args.model,
         forecast_csv=args.forecast,
         measures_csv=args.measures,
+        load_csv=args.load_csv,
         out_csv=args.out,
         show=True,
     )

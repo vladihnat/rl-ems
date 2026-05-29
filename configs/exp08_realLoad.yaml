@@ -1,17 +1,18 @@
 experiment:
-  name: exp05_cc_300kBS_g999
+  name: exp08_realLoad_300Bs_g99
   seed: 42
 
 time:
-  delta_t_min: 5
+  delta_t_min: 15
   horizon_h: 6
-  # derived: horizon_steps = (horizon_h * 60) / delta_t_min = 72
 
 data:
-  pv_csv: "data/Pyrano1w_clean.csv"
+  pv_csv: "data/irradiance_training.csv"
   pv_column: "Global30_kW"
+  load_csv: "data/load_training.csv"
+  load_column: "Conso_tot"
 
-observation: 
+observation:
   load_forecast: true
 
 battery:
@@ -32,7 +33,7 @@ grid:
   curtailment: clip
 
 load:
-  type: fixed
+  type: real
   base_load_kw: 1.0
 
 pv:
@@ -45,7 +46,7 @@ reward:
   soc_safe_min: 0.2
   soc_safe_max: 0.9
   spread_penalty: true
-  sigma_bat: 0.01        # quadratic battery power penalty weight: -sigma_bat * (Pb/Pb_max)²
+  sigma_bat: 0.01
 
 training:
   algorithm: SAC
@@ -53,6 +54,9 @@ training:
   learning_rate: 0.0003
   batch_size: 256
   buffer_size: 300_000
-  gamma: 0.999
+  gamma: 0.99
   train_split: 0.8
   split_method: temporal
+  random_soc:  false
+  norm_obs:    false
+  norm_reward: false

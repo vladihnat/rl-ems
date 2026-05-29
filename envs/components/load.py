@@ -5,16 +5,21 @@ import pandas as pd
 
 
 class LoadModel:
-    def __init__(self, cfg: dict, n_steps: int, delta_t_min: float, timestamps=None):
+    def __init__(self, cfg: dict, data_cfg: dict, n_steps: int, delta_t_min: float, timestamps=None):
         self.load_type = cfg["type"]
         self.base_load_kw = cfg["base_load_kw"]
         self.n_steps = n_steps
         self.delta_t_min = delta_t_min
+        self.timestamps = timestamps
 
         if self.load_type == "fixed":
             self.load_profile = self._generate_sinusoidal(n_steps, delta_t_min, timestamps)
+        elif self.load_type == "real":
+            df = pd.read_csv(data_cfg["load_csv"], parse_dates=["Time"])
+            self.load_profile = df[data_cfg["load_column"]].values.astype(np.float64)
+            self.timestamps = df["Time"].values
+            self.n_steps = len(self.load_profile)
         else:
-            # TODO : Implementer des charges variables à partir de données réelles (ou de modèles plus complexes)
             raise ValueError(f"Unknown load type: {self.load_type}")
 
     def _generate_sinusoidal(self, n_steps, delta_t_min, timestamps=None):
@@ -34,6 +39,8 @@ class LoadModel:
         """Restrict to a subset of timestep indices.
         Useful for creating train/test splits from a single load profile."""
         self.load_profile = self.load_profile[indices]
+        if self.timestamps is not None:
+            self.timestamps = self.timestamps[indices]
         self.n_steps = len(self.load_profile)
 
     def get_load(self, step_index: int) -> float:

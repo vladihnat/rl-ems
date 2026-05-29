@@ -58,6 +58,7 @@ class MicrogridEnv(gym.Env):
         self._load_forecast_in_obs = config.get("observation", {}).get("load_forecast", False)
         self._spread_penalty = config["reward"].get("spread_penalty", False)
         self._sigma_bat = config["reward"].get("sigma_bat", 0.0)
+        self._random_soc = config.get("training", {}).get("random_soc", False)
         self._pb_max = max(self.max_charge_kw, self.max_discharge_kw)
 
         price_forecast_dim = self.horizon_steps if self.price_signal.has_forecast else 0
@@ -102,7 +103,14 @@ class MicrogridEnv(gym.Env):
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         self.step_index = 0
-        self.battery.reset()
+        if self._random_soc:
+            eps = 0.05
+            self.battery.soc = float(self.np_random.uniform(
+                self.battery.soc_min + eps,
+                self.battery.soc_max - eps,
+            ))
+        else:
+            self.battery.reset()
 
         # (Re)allocate the monitoring buffer for this rollout.
         # MATLAB equivalent: MPC/simu.m:15  obj.MicroGrid.Monitoring = nan(nPoints, 6).
@@ -143,6 +151,7 @@ class MicrogridEnv(gym.Env):
             - price_exp * max(-P_grid, 0.0)
         ) * self.delta_t_h
 
+        # SoC penality is dead code when soc_safe_min = soc_min and soc_safe_max = soc_max (clip in battery.step) 
         r_soc = -self.sigma_soc * (
             max(0.0, self.soc_safe_min - new_soc)
             + max(0.0, new_soc - self.soc_safe_max)
@@ -153,7 +162,7 @@ class MicrogridEnv(gym.Env):
         else:  # "clip"
             r_curt = 0.0
 
-        r_bat_power = -self._sigma_bat * (Pb_effective / self._pb_max) ** 2
+        # r_bat_power = -self._sigma_bat * (Pb_effective / self._pb_max) ** 2
 
         r_spread = 0.0
         if self._spread_penalty:
@@ -161,7 +170,8 @@ class MicrogridEnv(gym.Env):
             if Pb_effective > 0.0 and pv_surplus > 0.0:
                 r_spread = -(price_imp - price_exp) * min(Pb_effective, pv_surplus) * self.delta_t_h
 
-        reward = r_eco + r_soc + r_curt + r_bat_power + r_spread
+        # reward = r_eco + r_soc + r_curt + r_bat_power + r_spread
+        reward = r_eco + r_soc + r_curt +  r_spread
 
         # reward = r_eco + r_soc + r_curt
 
@@ -186,7 +196,7 @@ class MicrogridEnv(gym.Env):
                     "price_exp": float(price_exp),
                     "r_eco":     float(r_eco),
                     "r_soc":     float(r_soc),
-                    "r_bat_power": float(r_bat_power),
+                    # "r_bat_power": float(r_bat_power),
                     "r_spread":  float(r_spread),
                     "reward":    float(reward),
                     "pcurt":     float(Pcurt),
@@ -203,7 +213,7 @@ class MicrogridEnv(gym.Env):
             "soc": new_soc,
             "r_eco": r_eco,
             "r_soc": r_soc,
-            "r_bat_power": r_bat_power,
+            # "r_bat_power": r_bat_power,
             "r_spread": r_spread,
             "Pcurt": Pcurt,
             "pv_t": pv_t,

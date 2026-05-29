@@ -1404,3 +1404,52 @@ Monitoring enhancement — columns, validation, plots
     Toutes les commandes Python passent par `micromamba run -n stageCorse python ...`.
     Aucun autre environnement n'est autorisé. `stageCorse` existe déjà — ne pas le créer
     ni le vérifier.
+
+## Clean load and extract training/test data
+    J'ai reçu le csv d'un profil de charges realiste et j'ai besoin de lui appliquer un pretraitement pour pouvoir l'utiliser dans l'entrainement de l'agent RL
+
+    Ainsi j'ai besoin de deux taches, la premiere le nettoyage du profil des charges et ensuit l'extraction des données nécessaire a l'entrainement.
+
+    Tache 1 - pretraitement des charges  : 
+
+    Le csv de charges data/energy_community.csv possede les colonnes suivantes :  ['Date', 'Prod_pv', 'Conso_resident', 'Conso_bureau', 'Conso_ecole']
+    et est fourni avec un pas de temps de 1h et dont toute les valeurs sont des kW (a l'exception des dates)
+
+    ainsi un exemple d'une ligne succesives est : 
+    01/01/2025 06:00	2.29	27.25	4.26	0.3
+
+    Ce que l'exemple veut dire : 
+
+    Le 01/01/2025 de 6:00 à 7:00 (utilisation pendant 1h) la consommation residente a était de 27.25 kW,  la consommation bureau a était de 4.26 kW et  la consommation ecole a était de 0.3 kW (tot = 31.81 kW).
+
+    Ainsi une division des charges a un pas de 15 min pourrais correspondre a des valeurs comme : 
+
+    6:00 -> tot : 31.81/4
+    6:15 -> tot : 31.81/4
+    6:30 -> tot : 31.81/4
+    6:45-> tot : 31.81/4 
+    et ansi la somme des 4*(31.81/4) = 31.81
+
+    Evidemment diviser par 4 ne correspond pas a l'interpolation, mais on pourrais, peut etre, considerer des options natives de DataFrame.interpolate() comme method = 'time' (**a verifier que cela marche dans notre cas**), l'idée c'est que la somme des données entre chaque heure correspond a la charge originale (ou du moins avec une marge d'erreur negligeable epsilon)
+
+    Ainsi j'ai besoin d'un fichier data/clean_load.py qui reçoit le fichier data/energy_community.csv et qui genere un nouveau csv data/load_profile.csv qui tout d'abord se debarrase de la colonne 'Prod_PV' puis dans la colonne Date on change l'année 2025 par 2023 au format 2023-01-01 00:00:00 et le nom de la colonne "Date"a "Time" (i.e. même format que les données data/Pyrano*).
+    Ensuite il faudra appliquer le resamplig selon un pas de temps qu'on pourras choisir comme variable globale au debut du fichier (dans ce cas on choisi le pas de temps delta t =  15 min). Finalement le nouveau CSV devra avoir une nouvelle colonne 'Conso_tot' qui correspond a la somme des 'Conso_resident', 'Conso_bureau', 'Conso_ecole'
+
+    Tache 2 (data extraction for training) : 
+    L'etat du projet evolve, maintenant on disposera d'un fichier d'irradiance pv (qu'on utilisera comme prevision pour les prevision parfaites) ceci est deja implementer avec les données data/Pyrano, mais aussi d'un fichier load_profile.csv (resultat tache 1) avec un profil (et donc prevision de loads), ceci pourra etre fourni a l'agent lors des configs dans la partie data et donc pourra etre reutiliser par la fonction load_forecast. 
+
+    Ainsi pour realiser cette extraction on utilisera deux fichiers data/Pyrano1Y_clean.csv pour l'irradiance solaire et data/load_profile.csv pour le profil de charges. On peut continuer avec la même idée d'implementation pour le choix de la colonne utile, i.e. dans configs/* on chosi : 
+    `pv_column` avec : 
+    data:
+      pv_column: "Global30_kW"
+    et maintenant on pourra rajouter load_column : "Conso_tot"
+
+    Ainsi pour l'extraction on pourra reutiliser la logique de data/extract_pyrano_simu.py, i.e. on fourni un CLI python data/extract_pyrano_simu.py --nbD <int> [--month <1-12>] [--startDate <1-28>] pour indiquer le nombre de jours, et la date de debut pour l'exctraction. CEPENDANT il faudra faire attention a l'extraction des données dans data/Pyrano1Y_clean.csv car les données extraits doivent coincider avec les timestamps de load_profile.csv, i.e. si dans load_profile.csv on a utiliser un pas de 15 min les données extraits de Pyrano1Y_clean.csv seront que ceux qui coincides avec load_profile.csv; pour ceci les deux fichier partagerons le meme format d'heure (decidé dans la tache 1) ainsi il suffira d'utiliser la colonne "Time" comme clé. 
+
+    Le resultat de cette extraction doit etre 2 fichier csv : irradiance_training.csv and load_training.csv, ensuite ces fichiers seront utiliser dans l'entrainement du RL mais le split train/test est deja gerer donc pas de changement a rajouter.
+
+    NOTE : Verifier les implementations existantes et utilisation des données csv pour valider les nouvelles idees de data 
+    NOTE IMPORTANTE : tout test devra etre verifie EXCLUSIVEMENT dans micromamba stageCorse, tout autre env conda/micromamba est INTERDIT d'etre utiliser
+
+
+

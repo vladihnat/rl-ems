@@ -10,6 +10,7 @@ import json
 import os
 import shutil
 import sys
+import time
 
 import matplotlib
 matplotlib.use("Agg")
@@ -86,16 +87,33 @@ def main():
     print(f"  Train steps: {train_env.max_steps}, Test steps: {test_env.max_steps}")
 
     print(f"\n[2/5] Training {algo_name} agent...")
-    model, episode_rewards = train_fn(train_env, cfg)
+    t_train_start = time.time()
+    result = train_fn(train_env, cfg)
+    training_time_s = time.time() - t_train_start
+    print(f"  Training time: {training_time_s:.1f}s")
+    model, episode_rewards = result[0], result[1]
+    vec_env = result[2] if len(result) > 2 else None
 
     model_path = os.path.join(output_dir, f"{algo_lower}_model.zip")
     model.save(model_path)
     print(f"  Model saved to {model_path}")
 
+    vec_normalize_path = None
+    if vec_env is not None:
+        vec_normalize_path = os.path.join(output_dir, "vec_normalize.pkl")
+        vec_env.save(vec_normalize_path)
+        print(f"  VecNormalize stats saved to {vec_normalize_path}")
+
     plot_training_curves(episode_rewards, os.path.join(output_dir, "training_curves.png"), algo_name)
 
     print(f"\n[3/5] Evaluating {algo_name} on test set...")
-    rl_metrics = evaluate_fn(model, test_env)
+    eval_vec_normalize = None
+    if vec_normalize_path is not None:
+        from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+        eval_vec_normalize = VecNormalize.load(vec_normalize_path, DummyVecEnv([lambda: test_env]))
+        eval_vec_normalize.training = False
+        eval_vec_normalize.norm_reward = False
+    rl_metrics = evaluate_fn(model, test_env, eval_vec_normalize)
     print(f"  RL net cost: {rl_metrics['net_cost']:.4f} EUR")
     print(f"  RL self-consumption: {rl_metrics['self_consumption_rate']:.2%}")
 
@@ -119,6 +137,7 @@ def main():
         return obj
 
     all_metrics = {
+        "training": {"training_time_s": round(training_time_s, 2)},
         "rl": {k: to_serializable(v) for k, v in rl_metrics.items() if k != "history"},
         "milp": {k: to_serializable(v) for k, v in milp_metrics.items() if k != "history"},
         "comparison": {k: to_serializable(v) for k, v in comparison.items()},

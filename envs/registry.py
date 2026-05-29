@@ -47,10 +47,17 @@ def make_env(config_path: str):
 
         load = LoadModel(
             cfg_dict["load"],
+            cfg_dict["data"],
             n_steps=len(indices),
             delta_t_min=cfg_dict["time"]["delta_t_min"],
             timestamps=pv.timestamps,
         )
+        if load.load_type != "fixed":
+            assert load.n_steps == pv_full.n_steps, (
+                f"load_csv length ({load.n_steps}) != pv_csv length "
+                f"({pv_full.n_steps}); the two must be row-aligned on Time."
+            )
+            load.set_data_slice(indices)
 
         battery = BatteryModel(cfg_dict["battery"])
         price_signal = PriceSignal(
