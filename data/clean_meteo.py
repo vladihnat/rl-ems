@@ -117,9 +117,9 @@ def clean_file(input_path: str | Path, output_path: str | Path) -> None:
 
 
 FILES = [
-    ("Pyrano1w.csv",  "Pyrano1w_clean.csv"),
-    ("Pyrano1M.csv",  "Pyrano1M_clean.csv"),
-    ("Pyrano1Y.csv",  "Pyrano1Y_clean.csv"),
+    ("raw/Pyrano1w.csv",  "clean/Pyrano1w_clean.csv"),
+    ("raw/Pyrano1M.csv",  "clean/Pyrano1M_clean.csv"),
+    ("raw/Pyrano1Y.csv",  "clean/Pyrano1Y_clean.csv"),
 ]
 
 if __name__ == "__main__":

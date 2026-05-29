@@ -8,7 +8,7 @@ time:
   # derived: horizon_steps = (horizon_h * 60) / delta_t_min = 72
 
 data:
-  pv_csv: "data/Pyrano1w_clean.csv"
+  pv_csv: "data/clean/Pyrano1w_clean.csv"
   pv_column: "Global30_kW"
 
 observation:
