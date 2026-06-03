@@ -38,6 +38,10 @@ def run_milp(env, config: dict) -> dict:
     P_imp = cp.Variable(T, nonneg=True)
     P_exp = cp.Variable(T, nonneg=True)
     Pcurt = cp.Variable(T, nonneg=True)  # curtailment PV explicite
+    # Puissance fantôme (slack à la Duchaud-JL, cf. @EmsLinprog Pph) : production
+    # « sortie du néant » ≥ 0, sans borne supérieure, fortement pénalisée. Permet de
+    # boucler le bilan quand l'import réseau + la batterie ne peuvent pas servir la charge.
+    P_phantom = cp.Variable(T, nonneg=True)
     soc = cp.Variable(T + 1)
 
     constraints = []
@@ -45,8 +49,8 @@ def run_milp(env, config: dict) -> dict:
     constraints.append(soc[0] == init_soc)
 
     for t in range(T):
-        # bilan corrigé : Pp_used = pv − Pcurt
-        constraints.append(Pg[t] == load_vals[t] - (pv_vals[t] - Pcurt[t]) - Pb[t])
+        # bilan corrigé : Pp_used = pv − Pcurt ; la puissance fantôme s'ajoute à l'offre
+        constraints.append(Pg[t] == load_vals[t] - (pv_vals[t] - Pcurt[t]) - Pb[t] - P_phantom[t])
         constraints.append(Pg[t] == P_imp[t] - P_exp[t])
         constraints.append(Pcurt[t] <= pv_vals[t])
 
@@ -76,8 +80,12 @@ def run_milp(env, config: dict) -> dict:
     constraints.append(Pb_discharge <= max_discharge * b)
     constraints.append(Pb_charge    <= max_charge    * (1 - b))
 
+    # Pénalité fantôme ≫ tout prix d'import ⇒ le solveur épuise d'abord le réseau réel
+    # (P_imp = max_imp) avant de recourir à la puissance fantôme. Défaut 1e3 €/kWh (Duchaud-JL).
+    phantom_penalty = cfg["grid"].get("phantom_penalty", 1e3)
     objective = cp.Minimize(
-        cp.sum(cp.multiply(price_imp, P_imp) - cp.multiply(price_exp, P_exp)) * delta_t_h
+        (cp.sum(cp.multiply(price_imp, P_imp) - cp.multiply(price_exp, P_exp))
+         + phantom_penalty * cp.sum(P_phantom)) * delta_t_h
     )
 
     prob = cp.Problem(objective, constraints)
@@ -111,10 +119,16 @@ def run_milp(env, config: dict) -> dict:
         "price_imp": np.asarray(price_imp, dtype=np.float64),
         "price_exp": np.asarray(price_exp, dtype=np.float64),
         "Pcurt": np.asarray(Pcurt.value, dtype=np.float64),
+        "P_phantom": np.asarray(P_phantom.value, dtype=np.float64),
     }
 
     metrics = compute_metrics(history, delta_t_h, soc_min, soc_max, price_imp, price_exp)
     metrics["history"] = history
     metrics["solver_status"] = prob.status
     metrics["objective_value"] = prob.value
+    # Diagnostic de sous-dimensionnement : énergie fantôme servie (hors économie réelle,
+    # net_cost reste l'économie réseau pure car recalculée depuis Pg_sol).
+    phantom = np.asarray(P_phantom.value, dtype=np.float64)
+    metrics["phantom_energy_kwh"] = float(np.sum(phantom) * delta_t_h)
+    metrics["phantom_steps"] = int(np.sum(phantom > 1e-6))
     return metrics

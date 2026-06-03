@@ -123,7 +123,12 @@ def run(
     metrics = run_milp(env, cfg)
     hist = metrics["history"]
     print(f"       solver status   = {metrics['solver_status']}")
-    print(f"       objective value = {metrics['objective_value']:.4f} €")
+    print(f"       objective value = {metrics['objective_value']:.4f} € "
+          f"(inclut la pénalité fantôme)")
+    print(f"       grid net cost   = {metrics['net_cost']:.4f} € (économie réseau réelle)")
+    if metrics.get("phantom_energy_kwh", 0.0) > 1e-9:
+        print(f"       ⚠ puissance fantôme = {metrics['phantom_energy_kwh']:.2f} kWh "
+              f"sur {metrics['phantom_steps']} pas — système sous-dimensionné")
 
     print("[2/4] Replaying MILP actions through the env")
     n_plan = len(hist["Pb_effective"])
@@ -183,8 +188,8 @@ def run(
         sell_price=env.price_signal.export_prices,
     )
     print(f"       env-replay cost = {replay_cost:.4f} €  "
-          f"(MILP optimum = {metrics['objective_value']:.4f} €, "
-          f"gap = {replay_cost - metrics['objective_value']:+.4f} €)")
+          f"(MILP grid net cost = {metrics['net_cost']:.4f} €, "
+          f"gap = {replay_cost - metrics['net_cost']:+.4f} €)")
 
     print(f"[4/4] Opening interactive plots ({n_plan} steps shown — "
           f"{monitoring_df.index[0]} → {monitoring_df.index[-1]} — "

@@ -42,6 +42,10 @@ class MicrogridEnv(gym.Env):
         self.max_import_kw = config["grid"]["max_import_kw"]
         self.max_export_kw = config["grid"]["max_export_kw"]
 
+        # Pénalité de puissance fantôme (charge non servie) — identique à celle du MILP
+        # (baselines/milp_solver.py) pour que RL et MILP modélisent la même physique.
+        self.phantom_penalty = config["grid"].get("phantom_penalty", 1e3)
+
         self.curtailment_mode = config["grid"].get("curtailment", "clip")
         if self.curtailment_mode not in ("clip", "penal"):
             raise ValueError(
@@ -144,6 +148,11 @@ class MicrogridEnv(gym.Env):
 
         P_grid = float(np.clip(P_grid_raw, -self.max_export_kw, self.max_import_kw))
 
+        # Puissance fantôme = charge non servie au-delà de la limite d'import (ce que le
+        # clip ci-dessus écartait silencieusement). Pénalisée comme dans le MILP.
+        P_phantom = max(0.0, P_grid_raw - self.max_import_kw)
+        r_phantom = -self.phantom_penalty * P_phantom * self.delta_t_h
+
         price_imp = self.price_signal.get_import_price(self.step_index)
         price_exp = self.price_signal.get_export_price(self.step_index)
         r_eco = -(
@@ -171,7 +180,7 @@ class MicrogridEnv(gym.Env):
                 r_spread = -(price_imp - price_exp) * min(Pb_effective, pv_surplus) * self.delta_t_h
 
         # reward = r_eco + r_soc + r_curt + r_bat_power + r_spread
-        reward = r_eco + r_soc + r_curt +  r_spread
+        reward = r_eco + r_soc + r_curt +  r_spread + r_phantom
 
         # reward = r_eco + r_soc + r_curt
 
@@ -198,8 +207,10 @@ class MicrogridEnv(gym.Env):
                     "r_soc":     float(r_soc),
                     # "r_bat_power": float(r_bat_power),
                     "r_spread":  float(r_spread),
+                    "r_phantom": float(r_phantom),
                     "reward":    float(reward),
                     "pcurt":     float(Pcurt),
+                    "pph":       float(P_phantom),
                 },
             )
 
@@ -215,6 +226,8 @@ class MicrogridEnv(gym.Env):
             "r_soc": r_soc,
             # "r_bat_power": r_bat_power,
             "r_spread": r_spread,
+            "r_phantom": r_phantom,
+            "P_phantom": P_phantom,
             "Pcurt": Pcurt,
             "pv_t": pv_t,
             "load_t": load_t,
