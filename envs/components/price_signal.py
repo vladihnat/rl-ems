@@ -6,16 +6,72 @@ Inspired by the MATLAB reference:
 
 which defines a sinusoidal import price and a flat export price.
 
-Supported types (config["type"]):
+Supported types (config["price_type"]):
     "fixed"      — constant import/export prices (exp01 backward-compatible)
     "sinusoidal" — import_price(t) = base_import + amplitude * sin(2π*hour/period_h)
                    export_price(t) = base_export  (constant)
+    "step_hp_hc" — import HP/HC (+ créneau midi optionnel via hc_midday),
+                   export depuis la grille CoutsProd (heure × saison × semaine/WE)
+    "step_pointe"— import HC nuit / HP journée / Pointe soir (3 niveaux),
+                   export depuis la grille CoutsProd
 """
 
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+
+
+# Grille CoutsProd — coûts de production Corse, prix d'export (vente) en €/MWh.
+# 24 lignes = heures 0..23 ; prix maintenu constant intra-heure.
+# 4 colonnes = [Semaine-HauteSaison, WeekEnd-HauteSaison,
+#               Semaine-BasseSaison, WeekEnd-BasseSaison].
+_COUTS_PROD = np.array(
+    [
+        172, 178, 147, 147,
+        151, 153, 139, 138,
+        144, 145, 136, 134,
+        142, 142, 136, 134,
+        142, 142, 137, 134,
+        145, 143, 140, 135,
+        154, 146, 148, 138,
+        197, 161, 162, 144,
+        231, 179, 165, 147,
+        230, 189, 161, 148,
+        216, 186, 157, 145,
+        201, 181, 152, 143,
+        191, 175, 149, 140,
+        186, 166, 147, 138,
+        181, 164, 146, 137,
+        180, 164, 146, 137,
+        189, 170, 149, 140,
+        230, 200, 157, 146,
+        348, 295, 176, 160,
+        424, 356, 199, 175,
+        427, 366, 193, 173,
+        442, 392, 199, 183,
+        380, 367, 188, 180,
+        225, 217, 168, 165,
+    ],
+    dtype=np.float64,
+).reshape(24, 4)
+
+# Mois de haute saison Corse : été (juillet-août) + hiver (novembre-février).
+_HAUTE_SAISON_MONTHS = (1, 2, 7, 8, 11, 12)
+
+
+def _coutsprod_export_prices(timestamps) -> np.ndarray:
+    """Prix d'export €/kWh depuis la grille CoutsProd (heure × saison × semaine/WE).
+
+    Sélection de colonne :
+        col = (0 si haute saison, 2 si basse saison) + (1 si week-end, 0 si semaine).
+    Les valeurs CoutsProd sont en €/MWh → divisées par 1000 pour obtenir des €/kWh.
+    """
+    ts = pd.DatetimeIndex(pd.to_datetime(timestamps))
+    is_haute = np.isin(ts.month.to_numpy(), _HAUTE_SAISON_MONTHS)
+    weekend = (ts.dayofweek.to_numpy() >= 5).astype(int)
+    col = np.where(is_haute, 0, 2) + weekend
+    return (_COUTS_PROD[ts.hour.to_numpy(), col] / 1000.0).astype(np.float64)
 
 
 class PriceSignal:
@@ -56,8 +112,49 @@ class PriceSignal:
             self.export_prices = np.full(n, base_exp, dtype=np.float64)
             self.has_forecast = True
 
+        elif self.price_type == "step_hp_hc":          # modèle 2 : HP / HC
+            p_hp = float(config["price_hp"])           # ex. 0.2475
+            p_hc = float(config["price_hc"])           # ex. 0.1895
+            hc_midday = bool(config.get("hc_midday", False))
+
+            hours = np.array(
+                [pd.Timestamp(ts).hour + pd.Timestamp(ts).minute / 60.0
+                 for ts in timestamps],
+                dtype=np.float64,
+            )
+            is_hc = (hours >= 23) | (hours < 7)
+            if hc_midday:
+                is_hc |= (hours >= 12) & (hours < 15)
+
+            self.import_prices = np.where(is_hc, p_hc, p_hp)
+            self.export_prices = _coutsprod_export_prices(timestamps)
+            self.has_forecast = True
+
+        elif self.price_type == "step_pointe":         # modèle 1 : HC / HP / Pointe
+            p_hc = float(config["price_hc"])           # ex. 0.19
+            p_hp = float(config["price_hp"])           # ex. 0.25
+            p_pointe = float(config["price_pointe"])   # ex. 0.35
+
+            hours = np.array(
+                [pd.Timestamp(ts).hour + pd.Timestamp(ts).minute / 60.0
+                 for ts in timestamps],
+                dtype=np.float64,
+            )
+            is_hc = (hours >= 23) | (hours < 7)
+            is_pointe = (hours >= 18) & (hours < 22)
+
+            imp = np.full(n, p_hp, dtype=np.float64)   # HP par défaut (7-18 et 22-23)
+            imp[is_pointe] = p_pointe
+            imp[is_hc] = p_hc
+            self.import_prices = imp
+            self.export_prices = _coutsprod_export_prices(timestamps)
+            self.has_forecast = True
+
         else:
-            raise ValueError(f"Unknown price_type: '{self.price_type}'. Use 'fixed' or 'sinusoidal'.")
+            raise ValueError(
+                f"Unknown price_type: '{self.price_type}'. "
+                "Use 'fixed', 'sinusoidal', 'step_hp_hc' or 'step_pointe'."
+            )
 
     # ------------------------------------------------------------------ API
 

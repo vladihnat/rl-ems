@@ -1,5 +1,5 @@
 experiment:
-  name: exp08_realLoad
+  name: exp09_corseTarif
   seed: 42
 
 time:
@@ -28,9 +28,17 @@ battery:
 grid:
   max_import_kw: 17.0
   max_export_kw: 17.0
-  price_import: 0.15
-  price_export: 0.10
   curtailment: clip
+  # Import : modèle 2 (HP/HC + créneau midi). Export : grille CoutsProd (saison/heure/jour).
+  price_type: step_hp_hc           # ou step_pointe pour le modèle 1
+  price_hp: 0.2475                 # €/kWh — Tarif Bleu HP TTC Corse (fév 2024)
+  price_hc: 0.1895                 # €/kWh — Tarif Bleu HC TTC Corse (fév 2024)
+  hc_midday: true                  # activer le créneau HC 12h-15h | modele 3 
+  # --- modèle 1 (step_pointe) : décommenter et remplacer le bloc ci-dessus ---
+  # price_type: step_pointe
+  # price_hc: 0.19                  # HC nuit  [23h, 7h[
+  # price_hp: 0.25                  # HP journée [7h, 18h[ ∪ [22h, 23h[
+  # price_pointe: 0.35             # Pointe soir [18h, 22h[
 
 load:
   type: real

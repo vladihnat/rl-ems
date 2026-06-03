@@ -1,6 +1,6 @@
 experiment:
-  name: exp08_realLoad
-  seed: 42
+  name: exp_testCluster
+  seed: 40
 
 time:
   delta_t_min: 15
@@ -16,21 +16,23 @@ observation:
   load_forecast: true
 
 battery:
-  capacity_kwh: 24.0
+  capacity_kwh: 40.0
   soc_min: 0.2
   soc_max: 0.9
   max_charge_kw: 7.0
-  max_discharge_kw: 7.0
+  max_discharge_kw: 9.0
   efficiency_charge: 0.9
   efficiency_discharge: 0.9
   init_soc: 0.5
 
 grid:
-  max_import_kw: 17.0
-  max_export_kw: 17.0
-  price_import: 0.15
-  price_export: 0.10
+  max_import_kw: 20.0
+  max_export_kw: 20.0
   curtailment: clip
+  price_type: step_hp_hc           # ou step_pointe pour le modèle 1
+  price_hp: 0.2475                 # €/kWh — Tarif Bleu HP TTC Corse (fév 2024)
+  price_hc: 0.1895                 # €/kWh — Tarif Bleu HC TTC Corse (fév 2024)
+  hc_midday: true                  # activer le créneau HC 12h-15h | modele 3 
 
 load:
   type: real
@@ -38,8 +40,8 @@ load:
 
 pv:
   type: perfect
-  surface_m2: 91.32
-  eta_ref: 0.24
+  surface_m2: 1600.0
+  eta_ref: 0.20
 
 reward:
   sigma_soc: 10.0
@@ -50,7 +52,7 @@ reward:
 
 training:
   algorithm: SAC
-  total_timesteps: 1000000
+  total_timesteps: 300_000
   learning_rate: 0.0003
   batch_size: 256
   buffer_size: 300_000
