@@ -14,16 +14,25 @@ from envs.components.pv_source import PVSource
 
 
 def _temporal_split(pv_source: PVSource, split_ratio: float):
-    """Split data by unique dates — first split_ratio dates for train, rest for test.
+    """Split data by unique dates, stratified by month.
+
+    Within each month, the first split_ratio dates go to train, the rest to
+    test — so every season present in the data appears in both train and test.
+    With a single month present (single-window extraction) this is identical to
+    the previous chronological split.
 
     Returns (train_indices, test_indices) as integer arrays into the original data.
     """
-    unique_dates = np.unique(pv_source.dates)
-    n_train_dates = int(len(unique_dates) * split_ratio)
-    train_dates = set(unique_dates[:n_train_dates].tolist())
+    dates = pv_source.dates
+    months = pd.DatetimeIndex(dates).month.to_numpy()
+    train_dates: set = set()
+    for m in np.unique(months):
+        block = np.unique(dates[months == m])          # dates triées du mois
+        n_train = int(len(block) * split_ratio)
+        train_dates.update(block[:n_train].tolist())
 
-    train_idx = np.array([i for i, d in enumerate(pv_source.dates) if d in train_dates])
-    test_idx = np.array([i for i, d in enumerate(pv_source.dates) if d not in train_dates])
+    train_idx = np.array([i for i, d in enumerate(dates) if d in train_dates])
+    test_idx = np.array([i for i, d in enumerate(dates) if d not in train_dates])
     return train_idx, test_idx
 
 
