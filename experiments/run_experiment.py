@@ -118,14 +118,19 @@ def main():
     print(f"  RL self-consumption: {rl_metrics['self_consumption_rate']:.2%}")
 
     print("\n[4/5] Running MILP baseline on test set...")
-    test_env_milp, _, _ = make_env(args.config)
-    _, test_env_milp, _ = make_env(args.config)
-    milp_metrics = run_milp(test_env_milp, cfg)
-    print(f"  MILP net cost: {milp_metrics['net_cost']:.4f} EUR")
-    print(f"  MILP status: {milp_metrics['solver_status']}")
-
-    print("\n[5/5] Comparing results...")
-    comparison = compare_results(rl_metrics, milp_metrics, output_dir)
+    try:
+        import cvxpy  # noqa: F401
+        test_env_milp, _, _ = make_env(args.config)
+        _, test_env_milp, _ = make_env(args.config)
+        milp_metrics = run_milp(test_env_milp, cfg)
+        print(f"  MILP net cost: {milp_metrics['net_cost']:.4f} EUR")
+        print(f"  MILP status: {milp_metrics['solver_status']}")
+        print("\n[5/5] Comparing results...")
+        comparison = compare_results(rl_metrics, milp_metrics, output_dir)
+    except ImportError:
+        print("  [SKIP] cvxpy not available — MILP baseline skipped.")
+        milp_metrics = {}
+        comparison = {}
 
     def to_serializable(obj):
         if isinstance(obj, np.ndarray):
