@@ -4,7 +4,7 @@ Python port of the MATLAB `MicroGrid.Monitoring` matrix and `monitoTable`
 dependent property. One row per RL decision step; the row is written
 (indexed) at the moment the agent acts on the env.
 
-Column layout (extended schema, 19 columns):
+Column layout (extended schema, 23 columns):
     SHARED (always populated by RL or MILP rollouts):
         t          unix seconds (float64)
         Pp         PV production [kW], >= 0
@@ -23,6 +23,9 @@ Column layout (extended schema, 19 columns):
         reward     total step reward = r_eco + r_soc + r_curt + r_bat_power + r_spread
         Pcurt      PV curtailment [kW, >=0] — power shed by inverter when
                    surplus exceeds max_export and battery is saturated
+        Pph        phantom power [kW, >=0] — unserved load conjured to close the
+                   balance when import+battery can't meet demand (Duchaud-JL slack)
+        r_phantom  phantom-power penalty [€] = -phantom_penalty * Pph * dt (0 when Pph=0)
 
     MILP-ONLY (NaN for RL rollouts):
         Pb_charge      auxiliary charging magnitude [kW, >=0]
@@ -80,6 +83,10 @@ COL_PCURT        = 18
 # New reward components (appended last to avoid renumbering above)
 COL_R_BAT_POWER  = 19
 COL_R_SPREAD     = 20
+# Phantom power (slack à la Duchaud-JL) + its reward penalty — shared RL/MILP,
+# appended last to keep all preceding indices stable.
+COL_PPH          = 21
+COL_R_PHANTOM    = 22
 
 COLUMN_NAMES = [
     "t",
@@ -91,6 +98,7 @@ COLUMN_NAMES = [
     "action_raw", "Pb_command",
     "Pcurt",
     "r_bat_power", "r_spread",
+    "Pph", "r_phantom",
 ]
 NUM_COLUMNS = len(COLUMN_NAMES)
 
@@ -115,6 +123,8 @@ _OPTIONAL_KEYS = {
     "pcurt":        COL_PCURT,
     "r_bat_power":  COL_R_BAT_POWER,
     "r_spread":     COL_R_SPREAD,
+    "pph":          COL_PPH,
+    "r_phantom":    COL_R_PHANTOM,
 }
 
 
