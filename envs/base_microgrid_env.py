@@ -166,6 +166,7 @@ class MicrogridEnv(gym.Env):
             + max(0.0, new_soc - self.soc_safe_max)
         )
 
+        
         if self.curtailment_mode == "penal":
             r_curt = -price_exp * Pcurt * self.delta_t_h
         else:  # "clip"
@@ -173,6 +174,9 @@ class MicrogridEnv(gym.Env):
 
         # r_bat_power = -self._sigma_bat * (Pb_effective / self._pb_max) ** 2
 
+        # Ce que ça détecte : la batterie est en train de décharger (Pb_effective > 0) alors qu'il y a un surplus PV (pv_t >
+        # load_t). C'est une décision sous-optimale : la batterie gaspille de l'énergie stockée au lieu de laisser le PV couvrir
+        # la charge directement.
         r_spread = 0.0
         if self._spread_penalty:
             pv_surplus = max(0.0, pv_t - load_t)
