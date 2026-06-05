@@ -102,6 +102,11 @@ def run_milp(env, config: dict) -> dict:
     P_exp_sol = np.maximum(-Pg_sol, 0.0)
     r_eco_sol = -(price_imp * P_imp_sol - price_exp * P_exp_sol) * delta_t_h
 
+    # Include the phantom penalty in the reward so total_reward is comparable with
+    # the RL side (which already pays r_phantom). net_cost stays grid-only.
+    P_phantom_sol = np.asarray(P_phantom.value, dtype=np.float64)
+    r_phantom_sol = -phantom_penalty * P_phantom_sol * delta_t_h
+
     history = {
         "P_grid": Pg_sol,
         "Pb_effective": Pb_sol,
@@ -110,7 +115,7 @@ def run_milp(env, config: dict) -> dict:
         "load_t": load_vals,
         "r_eco": r_eco_sol,
         "r_soc": np.zeros(T),
-        "reward": r_eco_sol,
+        "reward": r_eco_sol + r_phantom_sol,
         "Pb_charge": Pb_charge.value,
         "Pb_discharge": Pb_discharge.value,
         "b_int": np.asarray(b.value, dtype=np.float64),
@@ -119,16 +124,15 @@ def run_milp(env, config: dict) -> dict:
         "price_imp": np.asarray(price_imp, dtype=np.float64),
         "price_exp": np.asarray(price_exp, dtype=np.float64),
         "Pcurt": np.asarray(Pcurt.value, dtype=np.float64),
-        "P_phantom": np.asarray(P_phantom.value, dtype=np.float64),
+        "P_phantom": P_phantom_sol,
     }
 
-    metrics = compute_metrics(history, delta_t_h, soc_min, soc_max, price_imp, price_exp)
+    # compute_metrics derives phantom_energy_kwh / phantom_steps / net_cost_adjusted
+    # from history["P_phantom"] (shared with the RL path for an apples-to-apples
+    # comparison). net_cost stays the pure grid economics recomputed from Pg_sol.
+    metrics = compute_metrics(history, delta_t_h, soc_min, soc_max,
+                              price_imp, price_exp, phantom_penalty)
     metrics["history"] = history
     metrics["solver_status"] = prob.status
     metrics["objective_value"] = prob.value
-    # Diagnostic de sous-dimensionnement : énergie fantôme servie (hors économie réelle,
-    # net_cost reste l'économie réseau pure car recalculée depuis Pg_sol).
-    phantom = np.asarray(P_phantom.value, dtype=np.float64)
-    metrics["phantom_energy_kwh"] = float(np.sum(phantom) * delta_t_h)
-    metrics["phantom_steps"] = int(np.sum(phantom > 1e-6))
     return metrics
