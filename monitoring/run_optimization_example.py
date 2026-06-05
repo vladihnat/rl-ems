@@ -73,6 +73,9 @@ def _load_model(model_path: str, algo: str):
     if algo_lower == "td3":
         from stable_baselines3 import TD3
         return TD3.load(model_path)
+    if algo_lower == "ddpg":
+        from stable_baselines3 import DDPG
+        return DDPG.load(model_path)
     raise ValueError(f"Unknown algorithm {algo!r}; extend _load_model() to support it.")
 
 
@@ -127,6 +130,30 @@ def _build_deployment_env(
     return env, cfg
 
 
+def _build_split_env(config_path: str, split: str):
+    """Build the env for a registry train/test split, matching ``make_env`` exactly.
+
+    Unlike ``_build_deployment_env`` (which exposes the full CSV), this reproduces
+    the temporal split used by ``experiments/run_experiment.py`` so the monitoring
+    rollout replays the *exact* train or test set that produced ``comparison.json``.
+
+    Args:
+        config_path: YAML config.
+        split: ``"train"`` or ``"test"``.
+
+    Returns:
+        (env, cfg) — the chosen split env, with ``max_steps`` extended to cover all
+        its steps (the training-time horizon cap is dropped for monitoring, like
+        ``_build_deployment_env``).
+    """
+    from envs.registry import make_env
+
+    train_env, test_env, cfg = make_env(config_path)
+    env = test_env if split == "test" else train_env
+    env.max_steps = env.pv.n_steps
+    return env, cfg
+
+
 def _build_forecast_df(forecast_csv: Path | None, env) -> pd.DataFrame:
     """Build a forecast DataFrame aligned to the env's timestamps.
 
@@ -169,9 +196,11 @@ def run(
     out_csv: str = "monitoring/runs/monitoring_table.csv",
     measures_csv: str | None = None,
     load_csv: str | None = None,
+    split: str = "full",
     n_steps: int | None = None,  # noqa: ARG001 — deprecated, kept for backward compat
     deterministic: bool = True,
     show: bool = True,
+    vec_normalize: str | None = None,
 ):
     """End-to-end deployment-style rollout + plotting.
 
@@ -187,29 +216,62 @@ def run(
         load_csv: Optional deployment load CSV (real-load configs). Overrides
             ``cfg["data"]["load_csv"]`` so simulation and training data stay
             separate. Ignored for fixed/synthetic load configs.
+        split: ``"full"`` (default) replays the whole CSV / deployment data;
+            ``"test"`` or ``"train"`` replays the exact registry split (same data
+            ``experiments/run_experiment.py`` evaluated), ignoring the CSV
+            override args.
         n_steps: Deprecated no-op. The rollout now spans the full deployment
             data; the visualisation window has been removed.
         deterministic: Pass-through to model.predict().
         show: Open the matplotlib windows.
+        vec_normalize: Observation-normalisation stats for norm_obs models.
+            None (default) auto-detects ``vec_normalize.pkl`` next to the model;
+            ``"none"`` forces raw observations; a path overrides the location.
+            Required for a faithful replay of norm_obs=true models — without it
+            the policy receives un-normalised obs and dispatches incorrectly.
 
     Returns:
         (monitoring_df, total_cost) — also written to ``out_csv``.
     """
-    deployment_csv = measures_csv if measures_csv is not None else forecast_csv
-
-    env, cfg = _build_deployment_env(config_path, deployment_csv, load_csv)
+    if split == "full":
+        deployment_csv = measures_csv if measures_csv is not None else forecast_csv
+        env, cfg = _build_deployment_env(config_path, deployment_csv, load_csv)
+    else:
+        env, cfg = _build_split_env(config_path, split)
 
     algo = cfg["training"]["algorithm"]
     print(f"[1/4] Loading {algo} model from {model_path}")
     model = _load_model(model_path, algo)
 
+    # Observation normalisation : indispensable pour rejouer fidèlement un modèle
+    # norm_obs=true (sinon obs brutes -> dispatch erroné). On ne normalise QUE l'obs
+    # (eval mode), l'env Gymnasium brut reste utilisé pour le step — idem evaluate_sac.
+    vec_norm = None
+    if vec_normalize != "none":
+        if vec_normalize is not None:
+            vn_path = Path(vec_normalize)
+        else:
+            vn_path = Path(model_path).parent / "vec_normalize.pkl"
+        if vn_path.exists():
+            from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+            vec_norm = VecNormalize.load(str(vn_path), DummyVecEnv([lambda: env]))
+            vec_norm.training = False
+            vec_norm.norm_reward = False
+            print(f"       VecNormalize stats loaded from {vn_path}")
+        elif vec_normalize is not None:
+            raise FileNotFoundError(f"vec_normalize file not found: {vn_path}")
+
     rollout_steps = int(env.max_steps)
     print(f"[2/4] Rolling out {rollout_steps} decision steps (Δt = {env.delta_t_min} min)")
 
     obs, _ = env.reset()
+    if vec_norm is not None:
+        obs = vec_norm.normalize_obs(obs)
     for _ in range(rollout_steps):
         action, _ = model.predict(obs, deterministic=deterministic)
         obs, _reward, terminated, truncated, _info = env.step(action)
+        if vec_norm is not None:
+            obs = vec_norm.normalize_obs(obs)
         if terminated or truncated:
             break
 
@@ -235,7 +297,6 @@ def run(
         monitoring_df,
         delta_t_minutes=env.delta_t_min,
         cost=total_cost,
-        base_load_kw=cfg.get("load", {}).get("base_load_kw"),
         show=False,
     )
     plot_monitoring(
@@ -265,8 +326,16 @@ def main():
                    help="Deployment load CSV (real-load configs). Overrides the "
                         "config's data.load_csv so simulation data stays separate "
                         "from training data. Typically data/load_simulation.csv.")
+    p.add_argument("--split", default="full", choices=["full", "test", "train"],
+                   help="'full' replays the deployment CSV; 'test'/'train' replay "
+                        "the exact registry split (same data run_experiment.py "
+                        "evaluated). With test/train the CSV args are ignored.")
     p.add_argument("--out", default="monitoring/runs/monitoring_table.csv",
                    help="Destination CSV for the monitoring table")
+    p.add_argument("--vec-normalize", default=None,
+                   help="Obs-normalisation stats for norm_obs models. Default: "
+                        "auto-detect vec_normalize.pkl next to the model. "
+                        "'none' forces raw obs; or pass an explicit .pkl path.")
     args = p.parse_args()
 
     run(
@@ -275,8 +344,10 @@ def main():
         forecast_csv=args.forecast,
         measures_csv=args.measures,
         load_csv=args.load_csv,
+        split=args.split,
         out_csv=args.out,
         show=True,
+        vec_normalize=args.vec_normalize,
     )
 
 

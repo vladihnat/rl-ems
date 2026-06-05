@@ -33,6 +33,7 @@ _C_BAT_CHARGE = "#3498db"
 _C_GRID_IMP   = "#7f8c8d"
 _C_GRID_EXP   = "#34495e"
 _C_SOC        = "#16a085"
+_C_PHANTOM    = "#9b59b6"   # phantom power (slack Duchaud-JL) — stacked above grid import
 
 
 def _extend_for_step_post(t: np.ndarray, y: np.ndarray, delta_t: pd.Timedelta):
@@ -96,6 +97,9 @@ def plot_monitoring_milp(
     Pb_p   = plan["Pb"].to_numpy(dtype=float)
     Pg_p   = plan["Pg"].to_numpy(dtype=float)
     SoC_p  = plan["SoC"].to_numpy(dtype=float)
+    # Phantom power (slack à la Duchaud-JL). Optional column; NaN → 0.
+    Pph = (np.nan_to_num(df["Pph"].to_numpy(dtype=float), nan=0.0)
+           if "Pph" in df.columns else np.zeros_like(Pg))
 
     delta_t = pd.Timedelta(minutes=delta_t_minutes)
 
@@ -147,10 +151,17 @@ def plot_monitoring_milp(
     Pg_pos_ext = np.maximum(Pg_ext, 0.0)
     Pg_neg_ext = np.minimum(Pg_ext, 0.0)
 
+    _, Pph_ext = _extend_for_step_post(t.to_numpy(), Pph, delta_t)
     ax_pg.fill_between(t_ext, 0.0, Pg_pos_ext, step="post",
                        color=_C_GRID_IMP, alpha=0.40, label="Pg > 0 (import)")
     ax_pg.fill_between(t_ext, Pg_neg_ext, 0.0, step="post",
                        color=_C_GRID_EXP, alpha=0.40, label="Pg < 0 (export)")
+    # Phantom stacked on top of the (capped) grid import: shows the slack the
+    # planner conjured when import alone couldn't serve the load. Invisible when
+    # Pph=0 — legend always present for RL/MILP consistency.
+    ax_pg.fill_between(t_ext, Pg_pos_ext, Pg_pos_ext + Pph_ext, step="post",
+                       color=_C_PHANTOM, alpha=0.5, linewidth=0.0,
+                       label="Pph (phantom)")
     ax_pg.plot(t_ext, Pg_ext, drawstyle="steps-post",
                color=_C_ACTUAL, linewidth=1.4, label="Pg realized")
     ax_pg.plot(t_ext, Pg_p_ext, drawstyle="steps-post", linestyle="--",
@@ -161,7 +172,9 @@ def plot_monitoring_milp(
     ax_pg.set_ylabel("Pg (kW)")
     ax_pg.grid(True, axis="y", alpha=0.3)
     ax_pg.legend(loc="upper right", fontsize=9, ncol=2)
-    pg_amp = float(np.nanmax(np.abs(np.concatenate([Pg, Pg_p])))) or 1.0
+    # Include the phantom-topped import so the violet layer is never clipped.
+    pg_amp = float(np.nanmax(np.concatenate(
+        [np.abs(Pg), np.abs(Pg_p), Pg_pos_ext + Pph_ext]))) or 1.0
     ax_pg.set_ylim(-1.15 * pg_amp, 1.15 * pg_amp)
 
     # -------- Panel 4: SoC (continuous, not stairs) -----------------------

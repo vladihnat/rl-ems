@@ -24,6 +24,7 @@ _C_ERROR    = "#e74c3c"   # forecast-vs-actual error fill
 _C_BAT_DISCH  = "#2ecc71"
 _C_BAT_CHARGE = "#3498db"
 _C_SOC      = "#16a085"
+_C_PHANTOM  = "#9b59b6"   # phantom power (slack Duchaud-JL) — translucent fill on Pl
 
 
 def plot_monitoring(
@@ -59,6 +60,9 @@ def plot_monitoring(
     Pl = df["Pl"].to_numpy(dtype=float)
     Pb = df["Pb"].to_numpy(dtype=float)
     SoC = df["SoC"].to_numpy(dtype=float)
+    # Phantom power (slack à la Duchaud-JL). Optional column; NaN → 0.
+    Pph = (np.nan_to_num(df["Pph"].to_numpy(dtype=float), nan=0.0)
+           if "Pph" in df.columns else np.zeros_like(Pl))
 
     has_forecast = forecast_df is not None and not forecast_df.empty
     if has_forecast:
@@ -92,6 +96,10 @@ def plot_monitoring(
         ax_pl.plot(t, Pl_fc, "--", color=_C_FORECAST, linewidth=1.5, label="Pl forecast")
         ax_pl.fill_between(t, Pl, Pl_fc, color=_C_ERROR, alpha=0.18,
                            label="Forecast error")
+    # Top slice of the load served by phantom power (unserved load conjured from
+    # nothing). Translucent violet block; invisible when Pph=0 — legend always on.
+    ax_pl.fill_between(t, Pl - Pph, Pl, color=_C_PHANTOM, alpha=0.5,
+                       linewidth=0.0, label="Pph (phantom)")
     ax_pl.set_ylabel("Pl (kW)")
     ax_pl.grid(True, alpha=0.3)
     ax_pl.legend(loc="upper right", fontsize=9)

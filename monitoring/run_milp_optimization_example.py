@@ -44,7 +44,10 @@ from baselines.milp_solver import run_milp  # noqa: E402
 from monitoring.plot_monitoring_milp import plot_monitoring_milp  # noqa: E402
 from monitoring.plot_power import plot_power  # noqa: E402
 from monitoring.plot_validation_milp import plot_validation_milp  # noqa: E402
-from monitoring.run_optimization_example import _build_deployment_env  # noqa: E402
+from monitoring.run_optimization_example import (  # noqa: E402
+    _build_deployment_env,
+    _build_split_env,
+)
 
 
 def _pb_to_action(pb_kw: float, max_charge_kw: float, max_discharge_kw: float) -> np.ndarray:
@@ -89,6 +92,8 @@ def run(
     plan_csv: str = "monitoring/runs/milp_plan.csv",
     forecast_csv: str | None = None,
     measures_csv: str | None = None,
+    load_csv: str | None = None,
+    split: str = "full",
     n_steps: int | None = None,  # noqa: ARG001 — deprecated, kept for backward compat
     offset: int = 0,  # noqa: ARG001 — deprecated, kept for backward compat
     show: bool = True,
@@ -105,6 +110,13 @@ def run(
             when ``measures_csv`` is None.
         measures_csv: Optional measured-state CSV consumed by the env. Defaults
             to ``forecast_csv`` (perfect foresight).
+        load_csv: Optional deployment load CSV (real-load configs). Overrides
+            ``cfg["data"]["load_csv"]`` so simulation data stays separate from
+            training data. Typically ``data/load_simulation.csv``.
+        split: ``"full"`` (default) solves over the whole CSV / deployment data;
+            ``"test"`` or ``"train"`` solves over the exact registry split (same
+            data ``experiments/run_experiment.py`` evaluated), ignoring the CSV
+            override args.
         n_steps: Deprecated no-op. The MILP now solves the full trajectory and
             both plots cover it entirely.
         offset: Deprecated no-op (the visualisation window has been removed).
@@ -114,9 +126,11 @@ def run(
         ``(monitoring_df, milp_plan_df, replay_cost)`` — also written to the
         two CSV paths above.
     """
-    deployment_csv = measures_csv if measures_csv is not None else forecast_csv
-
-    env, cfg = _build_deployment_env(config_path, deployment_csv)
+    if split == "full":
+        deployment_csv = measures_csv if measures_csv is not None else forecast_csv
+        env, cfg = _build_deployment_env(config_path, deployment_csv, load_csv)
+    else:
+        env, cfg = _build_split_env(config_path, split)
 
     print(f"[1/4] Solving MILP (T = {env.max_steps} steps, "
           f"Δt = {env.delta_t_min} min)")
@@ -164,6 +178,10 @@ def run(
                     "pb_discharge": float(hist["Pb_discharge"][k]),
                     "b_int":        float(hist["b_int"][k]),
                     "pcurt":        float(hist["Pcurt"][k]),
+                    # Planner's phantom (slack), consistent with the planner Pb/Pg
+                    # overwritten above. Without this, the env-replay phantom from
+                    # env.step survives and contradicts the displayed Pb/Pg.
+                    "pph":          float(hist["P_phantom"][k]),
                 },
             )
         if terminated or truncated:
@@ -198,7 +216,6 @@ def run(
         monitoring_df,
         delta_t_minutes=env.delta_t_min,
         cost=replay_cost,
-        base_load_kw=cfg.get("load", {}).get("base_load_kw"),
         show=False,
     )
     plot_monitoring_milp(
@@ -231,6 +248,15 @@ def main():
     p.add_argument("--measures", default=None,
                    help="Measured-state CSV consumed by the env step by step. "
                         "Defaults to --forecast (perfect foresight).")
+    p.add_argument("--load-csv", default=None,
+                   help="Deployment load CSV (real-load configs). Overrides the "
+                        "config's data.load_csv so simulation data stays separate "
+                        "from training data. Typically data/load_simulation.csv.")
+    p.add_argument("--split", default="full", choices=["full", "test", "train"],
+                   help="'full' solves over the deployment CSV; 'test'/'train' "
+                        "solve over the exact registry split (same data "
+                        "run_experiment.py evaluated). With test/train the CSV "
+                        "args are ignored.")
     p.add_argument("--out", default="monitoring/runs/milp_monitoring_table.csv",
                    help="CSV path for the env-replayed monitoring table")
     p.add_argument("--plan-out", default="monitoring/runs/milp_plan.csv",
@@ -245,6 +271,8 @@ def main():
         plan_csv=args.plan_out,
         forecast_csv=args.forecast,
         measures_csv=args.measures,
+        load_csv=args.load_csv,
+        split=args.split,
         show=not args.no_show,
     )
 

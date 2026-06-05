@@ -8,9 +8,12 @@ Visual conventions:
 - Cross axes: the x-spine sits at y=0; sources (Pp, Pb>0, Pg>0) are stacked
   cumulatively upward, sinks (Pb<0, Pg<0) are stacked cumulatively downward.
 - The load Pl is drawn as a step-line on the **upper** side: the top of the
-  source stack should reach this line at every instant (Pp + Pb>0 + Pg>0 ≈ Pl).
-  Any visible gap reveals an energy-balance issue, e.g. a P_grid clipping
-  (see base_microgrid_env.py:110).
+  source stack should reach this line at every instant (Pp + Pb>0 + Pg>0 + Pph ≈ Pl).
+- Phantom power Pph (slack à la Duchaud-JL) is the top source layer, drawn in
+  violet: energy "conjured from nothing" to close the balance when import +
+  battery can't meet the load. It fills exactly the gap that a P_grid clipping
+  would otherwise leave between the source stack and the load line
+  (see base_microgrid_env.py:153, milp_solver.py:44).
 """
 
 from __future__ import annotations
@@ -31,6 +34,7 @@ _C_BAT_DISCH  = "#2ecc71"  # battery discharge (top half)
 _C_BAT_CHARGE = "#3498db"  # battery charge    (bottom half)
 _C_GRID_IMP   = "#7f8c8d"  # grid import       (top half)
 _C_GRID_EXP   = "#34495e"  # grid export       (bottom half)
+_C_PHANTOM    = "#9b59b6"  # phantom power     (top half, last layer — slack Duchaud-JL)
 
 
 def _extend_for_step_post(t: np.ndarray, y: np.ndarray, delta_t: pd.Timedelta):
@@ -46,7 +50,6 @@ def plot_power(
     monitoring_df: pd.DataFrame,
     delta_t_minutes: float = 10.0,
     cost: Optional[float] = None,
-    base_load_kw: Optional[float] = None,
     show: bool = True,
 ):
     """Display the main power-balance plot from a completed rollout.
@@ -57,9 +60,6 @@ def plot_power(
         delta_t_minutes: timestep size, used to extend the last stair and label
             the x-axis correctly.
         cost: optional total optimization cost (€). Shown in the title.
-        base_load_kw: if provided, overlays the analytic fixed-load curve
-            ``base_load_kw * |sin(2*pi*h/48)|`` (envs/components/load.py) on the
-            negative side instead of the recorded Pl values.
         show: when True, call ``plt.show()`` to open the interactive window.
             Tests pass show=False to keep the call non-blocking.
 
@@ -81,6 +81,10 @@ def plot_power(
     Pl = df["Pl"].to_numpy(dtype=float)
     Pb = df["Pb"].to_numpy(dtype=float)
     Pg = df["Pg"].to_numpy(dtype=float)
+    # Phantom power (slack à la Duchaud-JL). Optional column: tolerate old CSVs
+    # without it and NaN-filled rows (treated as zero phantom).
+    Pph = (np.nan_to_num(df["Pph"].to_numpy(dtype=float), nan=0.0)
+           if "Pph" in df.columns else np.zeros_like(Pp))
 
     # Split battery and grid by sign — each side becomes its own filled stairs.
     Pb_pos = np.maximum(Pb, 0.0)   # discharge, top half
@@ -95,10 +99,15 @@ def plot_power(
     # ---- cumulative source stack on the upper half --------------------------
     # `step='post'` holds the value of point i from t[i] until t[i+1] — a true
     # zero-order-hold matching MATLAB's `retime(..., 'previous')`.
+    # Phantom is the LAST top layer: it tops up the stack to the load line
+    # exactly when import+battery fall short (Pph>0). Always added so the
+    # legend entry stays consistent across RL and MILP figures (invisible when
+    # Pph=0).
     top_layers = [
         ("PV (Pp)",              Pp,     _C_PV),
         ("ESS discharge (Pb>0)", Pb_pos, _C_BAT_DISCH),
         ("Grid import (Pg>0)",   Pg_pos, _C_GRID_IMP),
+        ("Phantom (Pph)",        Pph,    _C_PHANTOM),
     ]
     top_cum = np.zeros_like(Pp)
     for label, layer, color in top_layers:
@@ -133,18 +142,9 @@ def plot_power(
 
     # ---- load: reference line on the UPPER half -----------------------------
     # The source stack above must reach this line at every instant.
-    if base_load_kw is not None:
-        # envs/components/load.py:30  base_load_kw * |sin(2*pi*t_hours/48)|
-        n_fine = max(len(df) * 10, 200)
-        t_fine = pd.date_range(t[0], t[-1] + delta_t, periods=n_fine)
-        hours = (t_fine.hour + t_fine.minute / 60.0 + t_fine.second / 3600.0).to_numpy()
-        load_fine = base_load_kw * np.abs(np.sin(2.0 * np.pi * hours / 48.0))
-        ax.plot(t_fine, load_fine, "-", color="#C40000", linewidth=2.5,
-                label="Load (Pl, analytic)")
-    else:
-        t_ext, Pl_ext = _extend_for_step_post(t, Pl, delta_t)
-        ax.plot(t_ext, Pl_ext, color="#1a1a1a", linewidth=2.5,
-                drawstyle="steps-post", label="Load (Pl)")
+    t_ext, Pl_ext = _extend_for_step_post(t, Pl, delta_t)
+    ax.plot(t_ext, Pl_ext, color="#1a1a1a", linewidth=2.5,
+            drawstyle="steps-post", label="Load (Pl)")
 
     # ---- cross-axes layout (the supervisor's signature visual convention)
     ax.spines["bottom"].set_position("zero")
