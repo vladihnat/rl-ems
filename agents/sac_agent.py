@@ -42,16 +42,31 @@ def train_sac(env, config: dict):
         vec_env   = None
         train_env = env
 
-    model = SAC(
-        "MlpPolicy",
-        train_env,
+    # Architecture réseau optionnelle (défaut SB3 = [256, 256] si non spécifiée).
+    policy_kwargs = {}
+    net_arch = t_cfg.get("net_arch")
+    if net_arch is not None:
+        policy_kwargs["net_arch"] = list(net_arch)
+
+    # Tous les kwargs SAC tunables : leurs défauts reproduisent les défauts SB3
+    # pour préserver la rétro-compat des configs qui ne les déclarent pas.
+    sac_kwargs = dict(
         learning_rate=t_cfg["learning_rate"],
         batch_size=t_cfg["batch_size"],
         buffer_size=t_cfg["buffer_size"],
         gamma=t_cfg.get("gamma", 0.99),
+        tau=t_cfg.get("tau", 0.005),
+        ent_coef=t_cfg.get("ent_coef", "auto"),
+        train_freq=t_cfg.get("train_freq", 1),
+        gradient_steps=t_cfg.get("gradient_steps", 1),
+        learning_starts=t_cfg.get("learning_starts", 100),
         seed=config["experiment"]["seed"],
         verbose=1,
     )
+    if policy_kwargs:
+        sac_kwargs["policy_kwargs"] = policy_kwargs
+
+    model = SAC("MlpPolicy", train_env, **sac_kwargs)
 
     callback = RewardLoggerCallback()
     model.learn(total_timesteps=t_cfg["total_timesteps"], callback=callback)
@@ -82,6 +97,8 @@ def evaluate_sac(model, env, vec_normalize=None) -> dict:
         "r_eco": [],
         "r_soc": [],
         "reward": [],
+        "P_phantom": [],
+        "Pcurt": [],
     }
 
     done = False
@@ -100,6 +117,8 @@ def evaluate_sac(model, env, vec_normalize=None) -> dict:
         history["r_eco"].append(info["r_eco"])
         history["r_soc"].append(info["r_soc"])
         history["reward"].append(reward)
+        history["P_phantom"].append(info["P_phantom"])
+        history["Pcurt"].append(info["Pcurt"])
 
     for k in history:
         history[k] = np.array(history[k])
@@ -110,7 +129,9 @@ def evaluate_sac(model, env, vec_normalize=None) -> dict:
     T = len(history["P_grid"])
     price_import = env.price_signal.import_prices[:T]
     price_export = env.price_signal.export_prices[:T]
+    phantom_penalty = env.cfg["grid"].get("phantom_penalty", 1e3)
 
-    metrics = compute_metrics(history, delta_t_h, soc_min, soc_max, price_import, price_export)
+    metrics = compute_metrics(history, delta_t_h, soc_min, soc_max,
+                              price_import, price_export, phantom_penalty)
     metrics["history"] = history
     return metrics
