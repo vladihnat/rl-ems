@@ -10,7 +10,7 @@ results/
 tests/
 monitoring/runs/*
 scratch/ 
-cluster/
+# cluster/
 
 temp_md/
 # --- Fichiers exclus ---
@@ -24,7 +24,7 @@ data/data_import_helpers.py
 data/*.csv 
 explore_pymgrid25.py
 test_compat.py
-
+cluster/ServiceHPC_SiteSPE.pdf
 
 
 rl_amelioration.md

@@ -1452,4 +1452,115 @@ Monitoring enhancement — columns, validation, plots
     NOTE IMPORTANTE : tout test devra etre verifie EXCLUSIVEMENT dans micromamba stageCorse, tout autre env conda/micromamba est INTERDIT d'etre utiliser
 
 
+Plan — Diagnostiquer & observer l'anomalie RL < MILP (exp_testCluster)
+=======================================================================
 
+    Context
+
+    Sur results/exp_testCluster (config configs/expTestCluster.yaml, RL SAC entraîné sur une
+    config sous-dimensionnée : import réseau 20 kW, batterie 40 kWh), le RL affiche un
+    net_cost inférieur au MILP (244.89 € vs 257.51 €, −4.9 %), ce qui est contre-intuitif
+    puisque le MILP est censé être optimal.
+
+    Cause racine identifiée (analyse de metrics.json + lecture du pipeline) :
+    evaluation/metrics.py:compute_metrics calcule net_cost uniquement depuis P_grid, qui
+    est plafonné à 20 kW. La charge non servie au-delà (la puissance fantôme Pph)
+    n'apparaît nulle part dans le coût. Or sur le test set ~47 % des pas requièrent du phantom :
+    - MILP : phantom = 1258.95 kWh (objectif pénalise le phantom à 1000 €/kWh → il priorise de
+    servir la charge, importe 2158 kWh).
+    - RL : phantom ≈ 1505 kWh (déduit de total_reward ≈ −1000 × E_phantom) → laisse ~246 kWh
+    de charge en plus non servie, importe 2097 kWh (−61 kWh ≈ −12.3 € à ~0.2 €/kWh), ce qui
+    explique exactement l'écart de net_cost (−12.62 €).
+
+    ➜ Le RL n'est pas meilleur : il « triche » en laissant ~20 % de charge en plus non servie.
+    net_cost et self_consumption_rate récompensent ce comportement ; les total_reward sont en
+    plus calculés différemment (MILP exclut la pénalité phantom, RL l'inclut). Note séparée : la PV
+    est sur-dimensionnée (surface_m2=1600 × eta_ref=0.20 ≈ 320 kWp, max 361.6 kW) → curtailment
+    massif du surplus, mais cela affecte les deux approches identiquement et n'est pas la cause
+    de l'anomalie net_cost (qui vient du déficit/phantom le soir).
+
+    Objectif : (1) rendre la comparaison honnête (métriques phantom-aware) et (2) fournir une
+    méthode d'observation (monitoring + plots) rejouable sur le test split exact ET une
+    fenêtre de simulation contiguë, en réutilisant les plots phantom-aware déjà en place.
+
+    Décisions utilisateur : données = les deux (test split + simu) ; visualisation =
+    réutiliser les plots par modèle existants (pas de nouveau plot combiné) ; métriques =
+    oui, phantom-aware. Tests dans l'env micromamba stageCorse uniquement.
+
+    Partie 1 — Métriques phantom-aware (comparaison honnête)
+
+    - evaluation/metrics.py:compute_metrics — ajouter un paramètre phantom_penalty: float = 1e3.
+    Quand "P_phantom" in history, calculer et toujours retourner :
+      - phantom_energy_kwh, phantom_steps
+      - served_load_ratio = (total_load_energy − phantom_energy_kwh) / total_load_energy (garde div0)
+      - net_cost_adjusted = net_cost + phantom_penalty * phantom_energy_kwh (coût VOLL de la charge
+    non servie — la seule grandeur comparable entre politiques à phantom différent).
+    Sans P_phantom : phantom_energy_kwh=0, served_load_ratio=1.0, net_cost_adjusted=net_cost.
+    - agents/sac_agent.py:evaluate_sac — ajouter "P_phantom": [] (et "Pcurt") à history,
+    append(info["P_phantom"]) dans la boucle, et passer
+    phantom_penalty=env.cfg["grid"].get("phantom_penalty", 1e3) à compute_metrics.
+    (info["P_phantom"]/info["Pcurt"] existent déjà — base_microgrid_env.py:230-231.)
+    - baselines/milp_solver.py — rendre total_reward comparable : la history["reward"]
+    (l. 113) ne contient que r_eco_sol ; ajouter la pénalité phantom
+    history["reward"] = r_eco_sol − phantom_penalty * P_phantom_sol * delta_t_h. Passer
+    phantom_penalty à compute_metrics et supprimer le calcul manuel dupliqué de
+    phantom_energy_kwh/phantom_steps (l. 131-133, désormais fournis par compute_metrics).
+    - evaluation/compare.py — ajouter au dict + au tableau imprimé + à comparison.json :
+    *_phantom_energy_kwh, *_served_load_ratio, *_net_cost_adjusted, et un
+    relative_gap_adjusted calculé sur net_cost_adjusted. Quand max(phantom RL, MILP) > 0,
+    imprimer un avertissement : « net_cost brut non comparable (charge non servie) — voir
+    net_cost_adjusted ».
+
+    Partie 2 — Monitoring + plots sur test split ET fenêtre simu (réutilisation)
+
+    Les scripts monitoring/run_optimization_example.py (RL) et run_milp_optimization_example.py
+    (MILP) produisent déjà les plots phantom-aware (plot_power, plot_monitoring,
+    plot_monitoring_milp) mais consomment le CSV entier sans appliquer le split. Deux ajouts :
+
+    - run_milp_optimization_example.py : ajouter --load-csv (param load_csv dans run() +
+    arg CLI) et le passer à _build_deployment_env(config_path, deployment_csv, load_csv) (le 3e
+    paramètre est déjà supporté côté helper). Met le MILP au niveau du RL pour consommer
+    load_simulation.csv.
+    - Option --split {full,test,train} (défaut full) sur les deux scripts. Ajouter dans
+    run_optimization_example.py un helper _build_split_env(config_path, split) (importé par le
+    script MILP, qui importe déjà _build_deployment_env de là) : appelle
+    envs.registry.make_env(config_path) → (train_env, test_env, cfg), sélectionne l'env, fixe
+    env.max_steps = env.pv.n_steps (couverture complète comme en déploiement), et retourne
+    (env, cfg). run() branche : split == "full" → _build_deployment_env (CSV/--forecast/
+    --load-csv) ; split in {test, train} → _build_split_env (données = split registry, qui
+    reproduit exactement le test set de comparison.json).
+
+    Usage résultant (env stageCorse) :
+    - Test split exact : --config configs/expTestCluster.yaml --split test (RL ajoute
+    --model results/exp_testCluster/sac_model.zip).
+    - Fenêtre simu contiguë : --config configs/expTestCluster.yaml --forecast data/irradiance_simulation.csv --measures data/irradiance_simulation.csv --load-csv
+    data/load_simulation.csv (les CSV simu existent déjà ; ré-extraire si besoin via
+    data/extract_pyrano_simu.py --nbD 7 --month 2 --startDate 1 --usage simu).
+
+    Chaque run écrit la table de monitoring (colonne Pph peuplée des deux côtés depuis les travaux
+    précédents) et ouvre les plots où la couche violette Phantom rend la charge non servie visible.
+
+    Partie 3 — Note de dimensionnement PV (recommandation, pas de modif auto)
+
+    Signaler dans le rapport/analyse que surface_m2=1600/eta_ref=0.20 produit ~320 kWp (max
+    361.6 kW) face à un réseau de 20 kW : à revoir (surface/eta réalistes ou limites réseau) pour des
+    expériences cohérentes. Ne pas modifier la config sans validation (cela change la sémantique
+    de l'expérience).
+
+    Vérification (env micromamba stageCorse uniquement)
+
+    1. Unit : ajouter un test (tests/) pour compute_metrics avec un history contenant
+    P_phantom>0 → vérifier phantom_energy_kwh, served_load_ratio < 1, et
+    net_cost_adjusted == net_cost + phantom_penalty*phantom_energy_kwh. Relancer
+    pytest tests/ -q.
+    2. Métriques honnêtes : recharger results/exp_testCluster/sac_model.zip et relancer une
+    comparaison (script ad hoc ou experiments/run_experiment.py allégé) → confirmer que
+    net_cost_adjusted(MILP) < net_cost_adjusted(RL) (le MILP redevient meilleur) et que
+    l'avertissement phantom s'affiche.
+    3. Observation test split : python -m monitoring.run_optimization_example --config configs/expTestCluster.yaml --model results/exp_testCluster/sac_model.zip --split test --out
+    monitoring/runs/rl_testsplit.csv puis l'équivalent MILP --split test → vérifier
+    Pph>0 dans les CSV et la bande violette dans les plots.
+    4. Observation simu : mêmes scripts avec --forecast/--measures data/irradiance_simulation.csv --load-csv data/load_simulation.csv → plots contigus propres, comparer RL vs MILP côte
+    à côte.
+    5. Backend Agg (MPLBACKEND=Agg) + --no-show pour la validation non interactive ; inspecter
+    les CSV (Pph, métriques) pour confirmer les écarts RL/MILP.
