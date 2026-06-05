@@ -1,0 +1,75 @@
+# A/B PROPRE de norm_obs : copie VERBATIM d'exp10_Batt400 + norm_obs=true comme SEUL
+# changement de comportement. Corrige le confond d'exp11 (qui changeait aussi
+# total_timesteps 2M->1M et buffer 750k->500k). Le bloc training est rendu explicite
+# AUX VALEURS PAR DEFAUT SB3 (tau/ent_coef/train_freq/gradient_steps/net_arch) pour servir
+# de base de sweep claire — ces valeurs EGALENT les defauts d'exp10, donc l'A/B reste propre.
+# Compare results/exp_11b_Batt400_normobs vs results/exp_10_Batt400 -> effet net de norm_obs.
+experiment:
+  name: exp_11b_Batt400_normobs
+  seed: 40
+
+time:
+  delta_t_min: 15
+  horizon_h: 24                    # report journalier midi->soir (la batterie 400 kWh l'exige) | reentrainement RL requis
+
+data:
+  pv_csv: "data/irradiance_training.csv"
+  pv_column: "Global30_kW"
+  load_csv: "data/load_training.csv"
+  load_column: "Conso_tot"
+
+observation:
+  load_forecast: true
+
+battery:
+  capacity_kwh: 400.0
+  soc_min: 0.2
+  soc_max: 0.9
+  max_charge_kw: 500.0             # 0.25C ("batterie 4 h") — absorbe le surplus PV de midi
+  max_discharge_kw: 500.0          # 0.25C — couvre la pointe du soir avec l'import reseau
+  efficiency_charge: 0.9
+  efficiency_discharge: 0.9
+  init_soc: 0.5
+
+grid:
+  max_import_kw: 500.0             # > pointe charge 118 kW -> puissance fantome ~0 (raccordement HTA realiste)
+  max_export_kw: 500.0              # autoconsommation : export limite (suffit apres PV reduit + batterie)
+  curtailment: clip
+  price_type: step_hp_hc           # ou step_pointe pour le modèle 1
+  price_hp: 0.2475                 # €/kWh — Tarif Bleu HP TTC Corse (fév 2024)
+  price_hc: 0.1895                 # €/kWh — Tarif Bleu HC TTC Corse (fév 2024)
+  hc_midday: true                  # activer le créneau HC 12h-15h | modele 3
+
+load:
+  type: real
+  base_load_kw: 1.0
+
+pv:
+  type: perfect
+  surface_m2: 1600.0                # crete PV ~181 kW (~1.5x pointe charge) ; energie annuelle ~0.83x la charge
+  eta_ref: 0.20
+
+reward:
+  sigma_soc: 10.0
+  soc_safe_min: 0.2
+  soc_safe_max: 0.9
+  spread_penalty: true
+  sigma_bat: 0.01
+
+training:
+  algorithm: SAC
+  total_timesteps: 2_000_000       # = exp10 (PAS 1M comme exp11) — leve le confond
+  learning_rate: 0.0003
+  batch_size: 256
+  buffer_size: 750_000             # = exp10 (PAS 500k comme exp11)
+  gamma: 0.99
+  tau: 0.005                       # = defaut SB3 (explicite pour base de sweep)
+  ent_coef: auto                   # = defaut SB3
+  train_freq: 1                    # = defaut SB3
+  gradient_steps: 1                # = defaut SB3
+  net_arch: [256, 256]             # = defaut SB3 ; axe de sweep
+  train_split: 0.8
+  split_method: temporal
+  random_soc:  false
+  norm_obs:    true                # SEUL changement de comportement vs exp10
+  norm_reward: false               # garder le net_cost comparable au MILP

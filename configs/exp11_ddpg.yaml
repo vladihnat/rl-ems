@@ -1,0 +1,72 @@
+# Piste algos (Tier 2) : DDPG sur la MEME obs / budget / eval qu'exp11b (norm_obs).
+# SB3 DDPG = TD3 sans double-Q ni target smoothing ; bruit d'action requis.
+# Comparer results/exp_11_Batt400_ddpg vs exp_11b_Batt400_normobs (SAC) : gap + dispatch.
+experiment:
+  name: exp_11_Batt400_ddpg
+  seed: 40
+
+time:
+  delta_t_min: 15
+  horizon_h: 24
+
+data:
+  pv_csv: "data/irradiance_training.csv"
+  pv_column: "Global30_kW"
+  load_csv: "data/load_training.csv"
+  load_column: "Conso_tot"
+
+observation:
+  load_forecast: true
+
+battery:
+  capacity_kwh: 400.0
+  soc_min: 0.2
+  soc_max: 0.9
+  max_charge_kw: 500.0
+  max_discharge_kw: 500.0
+  efficiency_charge: 0.9
+  efficiency_discharge: 0.9
+  init_soc: 0.5
+
+grid:
+  max_import_kw: 500.0
+  max_export_kw: 500.0
+  curtailment: clip
+  price_type: step_hp_hc
+  price_hp: 0.2475
+  price_hc: 0.1895
+  hc_midday: true
+
+load:
+  type: real
+  base_load_kw: 1.0
+
+pv:
+  type: perfect
+  surface_m2: 1600.0
+  eta_ref: 0.20
+
+reward:
+  sigma_soc: 10.0
+  soc_safe_min: 0.2
+  soc_safe_max: 0.9
+  spread_penalty: true
+  sigma_bat: 0.01
+
+training:
+  algorithm: DDPG
+  total_timesteps: 2_000_000
+  learning_rate: 0.0003
+  batch_size: 256
+  buffer_size: 750_000
+  gamma: 0.99
+  tau: 0.005
+  train_freq: 1
+  gradient_steps: 1
+  action_noise_sigma: 0.1          # bruit gaussien sur l'action [-1,1] (exploration DDPG)
+  net_arch: [256, 256]
+  train_split: 0.8
+  split_method: temporal
+  random_soc:  false
+  norm_obs:    true                # parite avec exp11b
+  norm_reward: false
