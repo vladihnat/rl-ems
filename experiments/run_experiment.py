@@ -54,6 +54,34 @@ def plot_training_curves(episode_rewards: list, output_path: str, algo_name: str
     print(f"Training curves saved to {output_path}")
 
 
+def plot_eval_curve(output_dir: str, output_path: str):
+    """Trace la courbe de reward sur la VALIDATION (``evaluations.npz`` d'EvalCallback).
+
+    Révèle le début du sur-apprentissage (pic de validation puis déclin), preuve visuelle
+    directe du diagnostic. No-op s'il n'y a pas de tranche de validation.
+    """
+    npz = os.path.join(output_dir, "evaluations.npz")
+    if not os.path.exists(npz):
+        return
+    data = np.load(npz)
+    ts = data["timesteps"]
+    results = data["results"].mean(axis=1)
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.plot(ts, results, marker=".", label="Validation reward")
+    best_i = int(np.argmax(results))
+    ax.axvline(ts[best_i], color="green", ls="--", alpha=0.7,
+               label=f"best @ {int(ts[best_i])} ({results[best_i]:.0f})")
+    ax.set_xlabel("Timestep")
+    ax.set_ylabel("Validation episode reward")
+    ax.set_title("Validation Curve (best-model selection)")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150)
+    plt.close(fig)
+    print(f"Eval curve saved to {output_path}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run microgrid experiment")
     parser.add_argument("--config", required=True, help="Path to YAML config file")
@@ -83,50 +111,82 @@ def main():
     shutil.copy2(args.config, os.path.join(output_dir, "config_used.yaml"))
 
     print("\n[1/5] Creating environments...")
-    train_env, test_env, cfg = make_env(args.config)
-    print(f"  Train steps: {train_env.max_steps}, Test steps: {test_env.max_steps}")
+    train_env, val_env, test_env, cfg = make_env(args.config, with_val=True)
+    val_steps = val_env.max_steps if val_env is not None else 0
+    print(f"  Train steps: {train_env.max_steps}, Val steps: {val_steps}, Test steps: {test_env.max_steps}")
 
     print(f"\n[2/5] Training {algo_name} agent...")
     t_train_start = time.time()
-    result = train_fn(train_env, cfg)
+    result = train_fn(train_env, cfg, eval_env=val_env, output_dir=output_dir)
     training_time_s = time.time() - t_train_start
     print(f"  Training time: {training_time_s:.1f}s")
     model, episode_rewards = result[0], result[1]
     vec_env = result[2] if len(result) > 2 else None
 
-    model_path = os.path.join(output_dir, f"{algo_lower}_model.zip")
-    model.save(model_path)
-    print(f"  Model saved to {model_path}")
+    # Modèle FINAL (repro) + ses stats VecNormalize finales.
+    final_model_path = os.path.join(output_dir, f"{algo_lower}_model.zip")
+    model.save(final_model_path)
+    print(f"  Final model saved to {final_model_path}")
 
     vec_normalize_path = None
     if vec_env is not None:
         vec_normalize_path = os.path.join(output_dir, "vec_normalize.pkl")
         vec_env.save(vec_normalize_path)
-        print(f"  VecNormalize stats saved to {vec_normalize_path}")
+        print(f"  Final VecNormalize stats saved to {vec_normalize_path}")
 
     plot_training_curves(episode_rewards, os.path.join(output_dir, "training_curves.png"), algo_name)
+    plot_eval_curve(output_dir, os.path.join(output_dir, "eval_curve.png"))
+
+    from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+
+    def _load_eval_vecnorm(pkl_path):
+        if pkl_path is None or not os.path.exists(pkl_path):
+            return None
+        venv = VecNormalize.load(pkl_path, DummyVecEnv([lambda: test_env]))
+        venv.training = False
+        venv.norm_reward = False
+        return venv
+
+    # Sélection best-model (EvalCallback sur la tranche de validation) ; fallback = modèle final.
+    best_model_path = os.path.join(output_dir, "best_model.zip")
+    best_vec_path = os.path.join(output_dir, "best_vecnormalize.pkl")
+    used_best = os.path.exists(best_model_path)
+    if used_best:
+        eval_model = type(model).load(best_model_path)
+        eval_vec_src = best_vec_path if os.path.exists(best_vec_path) else vec_normalize_path
+        print(f"  Using BEST-model checkpoint: {best_model_path}")
+    else:
+        eval_model = model
+        eval_vec_src = vec_normalize_path
+        print("  No best-model checkpoint (no validation slice) — evaluating FINAL model.")
 
     print(f"\n[3/5] Evaluating {algo_name} on test set...")
-    eval_vec_normalize = None
-    if vec_normalize_path is not None:
-        from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
-        eval_vec_normalize = VecNormalize.load(vec_normalize_path, DummyVecEnv([lambda: test_env]))
-        eval_vec_normalize.training = False
-        eval_vec_normalize.norm_reward = False
-    rl_metrics = evaluate_fn(model, test_env, eval_vec_normalize)
+    rl_metrics = evaluate_fn(eval_model, test_env, _load_eval_vecnorm(eval_vec_src))
     print(f"  RL net cost: {rl_metrics['net_cost']:.4f} EUR")
     print(f"  RL self-consumption: {rl_metrics['self_consumption_rate']:.2%}")
+
+    selection = {"used_best_model": used_best, "gap_best": None, "gap_final": None}
 
     print("\n[4/5] Running MILP baseline on test set...")
     try:
         import cvxpy  # noqa: F401
-        test_env_milp, _, _ = make_env(args.config)
         _, test_env_milp, _ = make_env(args.config)
         milp_metrics = run_milp(test_env_milp, cfg)
         print(f"  MILP net cost: {milp_metrics['net_cost']:.4f} EUR")
         print(f"  MILP status: {milp_metrics['solver_status']}")
         print("\n[5/5] Comparing results...")
         comparison = compare_results(rl_metrics, milp_metrics, output_dir)
+
+        # Référence : gap du modèle FINAL (diagnostic « loterie de point d'arrêt »).
+        if used_best:
+            final_metrics = evaluate_fn(model, test_env, _load_eval_vecnorm(vec_normalize_path))
+            final_comparison = compare_results(final_metrics, milp_metrics, output_dir=None)
+            selection["gap_best"] = comparison.get("relative_gap")
+            selection["gap_final"] = final_comparison.get("relative_gap")
+            print(f"  Gap best-model: {selection['gap_best']:+.1%}   "
+                  f"Gap final-model: {selection['gap_final']:+.1%}")
+        else:
+            selection["gap_final"] = comparison.get("relative_gap")
     except ImportError:
         print("  [SKIP] cvxpy not available — MILP baseline skipped.")
         milp_metrics = {}
@@ -143,6 +203,7 @@ def main():
 
     all_metrics = {
         "training": {"training_time_s": round(training_time_s, 2)},
+        "selection": {k: to_serializable(v) for k, v in selection.items()},
         "rl": {k: to_serializable(v) for k, v in rl_metrics.items() if k != "history"},
         "milp": {k: to_serializable(v) for k, v in milp_metrics.items() if k != "history"},
         "comparison": {k: to_serializable(v) for k, v in comparison.items()},

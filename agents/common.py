@@ -7,8 +7,10 @@ comparaison entre algorithmes se fasse à obs / budget / évaluation IDENTIQUES.
 ``sac_agent.py`` n'est volontairement pas modifié (code en cours dans l'arbre git).
 """
 
+import os
+
 import numpy as np
-from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.callbacks import BaseCallback, CallbackList, EvalCallback
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from evaluation.metrics import compute_metrics
@@ -28,6 +30,80 @@ class RewardLoggerCallback(BaseCallback):
             self.episode_rewards.append(self._current_reward)
             self._current_reward = 0.0
         return True
+
+
+class SaveVecNormalizeOnBest(BaseCallback):
+    """Sauve les stats VecNormalize d'entraînement à chaque nouveau best.
+
+    SB3 2.x ``EvalCallback`` ne sauve que ``best_model.zip`` au nouveau best (PAS la
+    normalisation). Branché en ``callback_on_new_best`` pour persister les obs_rms
+    courantes, afin que l'éval test du best-model utilise les bonnes statistiques.
+    """
+
+    def __init__(self, save_path: str, verbose: int = 0):
+        super().__init__(verbose)
+        self.save_path = save_path
+
+    def _on_step(self) -> bool:
+        # self.model peut ne pas être initialisé sur le child ; fallback via parent (EvalCallback).
+        model = getattr(self, "model", None) or getattr(getattr(self, "parent", None), "model", None)
+        if model is not None:
+            venv = model.get_vec_normalize_env()
+            if venv is not None:
+                venv.save(self.save_path)
+        return True
+
+
+def make_eval_callback(eval_env, t_cfg: dict, output_dir, total_timesteps):
+    """EvalCallback partagé : sélection best-model sur une tranche de VALIDATION.
+
+    - enveloppe ``eval_env`` en VecNormalize (mêmes flags qu'à l'entraînement,
+      ``training=False``, ``norm_reward=False``) ⇒ EvalCallback synchronise les stats
+      train→val à chaque éval (``sync_envs_normalization``) ;
+    - sauve ``best_model.zip`` (EvalCallback) + ``best_vecnormalize.pkl``
+      (``callback_on_new_best``) dans ``output_dir`` ;
+    - ``log_path`` ⇒ ``evaluations.npz`` (courbe de validation = détection du sur-apprentissage).
+
+    Retourne ``None`` si pas d'env de validation (comportement legacy : aucune sélection).
+    """
+    if eval_env is None or output_dir is None:
+        return None
+    norm_obs = t_cfg.get("norm_obs", False)
+    norm_reward = t_cfg.get("norm_reward", False)
+    if norm_obs or norm_reward:
+        eval_venv = VecNormalize(
+            DummyVecEnv([lambda: eval_env]),
+            norm_obs=norm_obs, norm_reward=False, training=False,
+        )
+        on_best = SaveVecNormalizeOnBest(os.path.join(output_dir, "best_vecnormalize.pkl"))
+    else:
+        eval_venv = eval_env
+        on_best = None
+    eval_freq = max(2000, int(total_timesteps) // 100)   # ~100 évals quel que soit le budget
+    return EvalCallback(
+        eval_venv,
+        best_model_save_path=output_dir,
+        log_path=output_dir,
+        n_eval_episodes=1,                # 1 épisode = toute la tranche val (déterministe)
+        eval_freq=eval_freq,
+        deterministic=True,
+        warn=False,
+        callback_on_new_best=on_best,
+    )
+
+
+def build_callback(eval_env, t_cfg: dict, output_dir, total_timesteps):
+    """Assemble (callback à passer à ``learn``, RewardLoggerCallback).
+
+    Combine le logger de reward (courbe d'entraînement) et, si une tranche de validation
+    est fournie, l'EvalCallback de sélection best-model. Le logger est renvoyé à part pour
+    récupérer ``episode_rewards`` après l'entraînement.
+    """
+    reward_logger = RewardLoggerCallback()
+    eval_cb = make_eval_callback(eval_env, t_cfg, output_dir, total_timesteps)
+    if eval_cb is None:
+        return reward_logger, reward_logger
+    return CallbackList([reward_logger, eval_cb]), reward_logger
 
 
 def make_train_env(env, t_cfg: dict):

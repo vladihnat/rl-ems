@@ -7,15 +7,18 @@ On-policy : pas de replay buffer ; expose n_steps/n_epochs/gae_lambda/clip_range
 from stable_baselines3 import PPO
 
 from agents.common import (
-    RewardLoggerCallback,
+    build_callback,
     build_policy_kwargs,
     evaluate_policy,
     make_train_env,
 )
 
 
-def train_ppo(env, config: dict):
-    """Train a PPO agent. Returns (model, episode_rewards, vec_env)."""
+def train_ppo(env, config: dict, eval_env=None, output_dir=None):
+    """Train a PPO agent. Returns (model, episode_rewards, vec_env).
+
+    ``eval_env`` (+ ``output_dir``) ⇒ sélection best-model sur validation (cf. common.build_callback).
+    """
     t_cfg = config["training"]
     train_env, vec_env = make_train_env(env, t_cfg)
     policy_kwargs = build_policy_kwargs(t_cfg)
@@ -36,10 +39,10 @@ def train_ppo(env, config: dict):
         ppo_kwargs["policy_kwargs"] = policy_kwargs
 
     model = PPO("MlpPolicy", train_env, **ppo_kwargs)
-    callback = RewardLoggerCallback()
-    model.learn(total_timesteps=t_cfg["total_timesteps"], callback=callback)
+    callbacks, reward_logger = build_callback(eval_env, t_cfg, output_dir, t_cfg["total_timesteps"])
+    model.learn(total_timesteps=t_cfg["total_timesteps"], callback=callbacks)
 
-    return model, callback.episode_rewards, vec_env
+    return model, reward_logger.episode_rewards, vec_env
 
 
 def evaluate_ppo(model, env, vec_normalize=None) -> dict:

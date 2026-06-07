@@ -9,7 +9,7 @@ from stable_baselines3 import DDPG
 from stable_baselines3.common.noise import NormalActionNoise
 
 from agents.common import (
-    RewardLoggerCallback,
+    build_callback,
     build_policy_kwargs,
     evaluate_policy,
     make_train_env,
@@ -25,8 +25,11 @@ def make_action_noise(env, t_cfg: dict):
     return NormalActionNoise(mean=np.zeros(n), sigma=float(sigma) * np.ones(n))
 
 
-def train_ddpg(env, config: dict):
-    """Train a DDPG agent. Returns (model, episode_rewards, vec_env)."""
+def train_ddpg(env, config: dict, eval_env=None, output_dir=None):
+    """Train a DDPG agent. Returns (model, episode_rewards, vec_env).
+
+    ``eval_env`` (+ ``output_dir``) ⇒ sélection best-model sur validation (cf. common.build_callback).
+    """
     t_cfg = config["training"]
     train_env, vec_env = make_train_env(env, t_cfg)
     policy_kwargs = build_policy_kwargs(t_cfg)
@@ -48,10 +51,10 @@ def train_ddpg(env, config: dict):
         ddpg_kwargs["policy_kwargs"] = policy_kwargs
 
     model = DDPG("MlpPolicy", train_env, **ddpg_kwargs)
-    callback = RewardLoggerCallback()
-    model.learn(total_timesteps=t_cfg["total_timesteps"], callback=callback)
+    callbacks, reward_logger = build_callback(eval_env, t_cfg, output_dir, t_cfg["total_timesteps"])
+    model.learn(total_timesteps=t_cfg["total_timesteps"], callback=callbacks)
 
-    return model, callback.episode_rewards, vec_env
+    return model, reward_logger.episode_rewards, vec_env
 
 
 def evaluate_ddpg(model, env, vec_normalize=None) -> dict:

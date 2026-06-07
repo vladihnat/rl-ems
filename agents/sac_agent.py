@@ -2,30 +2,19 @@
 
 import numpy as np
 from stable_baselines3 import SAC
-from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
+from agents.common import build_callback
 from evaluation.metrics import compute_metrics
 
 
-class RewardLoggerCallback(BaseCallback):
-    """Logs episode rewards for plotting training curves."""
-
-    def __init__(self):
-        super().__init__()
-        self.episode_rewards = []
-        self._current_reward = 0.0
-
-    def _on_step(self) -> bool:
-        self._current_reward += self.locals["rewards"][0]
-        if self.locals["dones"][0]:
-            self.episode_rewards.append(self._current_reward)
-            self._current_reward = 0.0
-        return True
-
-
-def train_sac(env, config: dict):
+def train_sac(env, config: dict, eval_env=None, output_dir=None):
     """Train a SAC agent on the given environment.
+
+    Args:
+        eval_env: optional validation env. Si fourni (avec ``output_dir``), un EvalCallback
+            sélectionne le meilleur checkpoint sur la validation (best_model.zip +
+            best_vecnormalize.pkl), au lieu de ne garder que le modèle final.
 
     Returns:
         (model, episode_rewards, vec_env): trained SB3 model, list of episode rewards,
@@ -68,10 +57,10 @@ def train_sac(env, config: dict):
 
     model = SAC("MlpPolicy", train_env, **sac_kwargs)
 
-    callback = RewardLoggerCallback()
-    model.learn(total_timesteps=t_cfg["total_timesteps"], callback=callback)
+    callbacks, reward_logger = build_callback(eval_env, t_cfg, output_dir, t_cfg["total_timesteps"])
+    model.learn(total_timesteps=t_cfg["total_timesteps"], callback=callbacks)
 
-    return model, callback.episode_rewards, vec_env
+    return model, reward_logger.episode_rewards, vec_env
 
 
 def evaluate_sac(model, env, vec_normalize=None) -> dict:
