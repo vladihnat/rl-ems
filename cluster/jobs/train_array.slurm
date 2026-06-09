@@ -18,6 +18,14 @@
 
 set -euo pipefail
 
+# Forcer UTF-8 : les nœuds de calcul tournent en locale C/POSIX (LANG/LC_ALL non définis),
+# où Python décode argv et encode stdout en ASCII strict. Tout caractère non-ASCII (accents
+# des messages FR, tirets cadratins) casse alors soit `python -c` ("surrogates not allowed"),
+# soit un print(). PYTHONUTF8=1 force le mode UTF-8 quelle que soit la locale ; LC_ALL/LANG
+# gardent aussi les autres outils propres.
+export PYTHONUTF8=1
+export LC_ALL=C.UTF-8 LANG=C.UTF-8
+
 if [[ -z "${MANIFEST:-}" ]]; then
     echo "[train_array] MANIFEST non défini. Utilisez launch_sweep.sh." >&2
     exit 1
@@ -29,7 +37,7 @@ import json, sys
 rows = json.load(open('${MANIFEST}'))
 idx = int('${SLURM_ARRAY_TASK_ID}')
 if idx >= len(rows):
-    sys.exit(f'index {idx} hors manifest ({len(rows)} entrées)')
+    sys.exit(f'index {idx} hors manifest ({len(rows)} entrees)')
 print(rows[idx]['config'])
 ")
 

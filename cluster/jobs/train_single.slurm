@@ -15,6 +15,11 @@
 
 set -euo pipefail
 
+# Forcer UTF-8 (voir train_array.slurm) : nœuds en locale C/POSIX → Python encode stdout en
+# ASCII strict et plante sur les messages FR accentués / tirets cadratins de run_experiment.py.
+export PYTHONUTF8=1
+export LC_ALL=C.UTF-8 LANG=C.UTF-8
+
 CONFIG=${CONFIG:-configs/exp01_perfect_foresight.yaml}
 echo "[train_single] config=${CONFIG}"
 
