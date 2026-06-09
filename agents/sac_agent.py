@@ -8,13 +8,62 @@ from agents.common import build_callback
 from evaluation.metrics import compute_metrics
 
 
+def _bc_pretrain_actor(model, env, config: dict, epochs: int, lr: float,
+                       batch_size: int, window_days: int, verbose: bool = True) -> int:
+    """Pré-entraîne l'acteur SAC par imitation (BC) du dispatch MILP, AVANT le RL.
+
+    Régression supervisée dans l'espace **pré-tanh** : ``μ(obs) ≈ atanh(a_MILP)``. On NE régresse
+    PAS sur l'action squashée ``tanh(μ)`` : avec des cibles bang-bang (beaucoup de ±1), la MSE
+    pousse μ→±∞, ``tanh`` sature et le gradient s'annule (acteur figé à ±1). Régresser sur
+    ``atanh`` (linéaire en μ) évite cette pathologie. L'espace d'action est [-1,1] donc l'action
+    déterministe de SAC est exactement ``tanh(μ)`` (pas de rescale). Met le comportement de
+    charge-réseau dans les poids de la policy (non dilué, contrairement au warm-start) ; le
+    critique reste vierge — SAC l'apprend pendant ``learn``.
+    """
+    import torch as th
+    from baselines.milp_dispatch import collect_milp_demos
+
+    obs, act = collect_milp_demos(env, config, window_days=window_days)
+    n = len(obs)
+    if n == 0:
+        print("[bc-pretrain] SKIP : aucune démo MILP collectée.")
+        return 0
+    device = model.device
+    obs_t = th.as_tensor(obs, device=device)
+    # Cible pré-tanh : atanh borné (atanh(±1)=±∞). 1e-3 → atanh≈±3.8, atteignable par μ.
+    act_t = th.as_tensor(act, device=device).clamp(-1.0 + 1e-3, 1.0 - 1e-3)
+    target_pre = th.atanh(act_t)
+    optim = th.optim.Adam(model.actor.parameters(), lr=lr)
+    bs = max(1, min(int(batch_size), n))
+    model.policy.set_training_mode(True)
+    for ep in range(int(epochs)):
+        perm = th.randperm(n, device=device)
+        running = 0.0
+        for i in range(0, n, bs):
+            sel = perm[i:i + bs]
+            mean_actions, _log_std, _ = model.actor.get_action_dist_params(obs_t[sel])
+            loss = th.nn.functional.mse_loss(mean_actions, target_pre[sel])
+            optim.zero_grad()
+            loss.backward()
+            optim.step()
+            running += loss.item() * len(sel)
+        if verbose:
+            # MSE rapportée sur l'ACTION squashée (interprétable, ∈[0,4]).
+            with th.no_grad():
+                mu, _, _ = model.actor.get_action_dist_params(obs_t)
+                a_mse = float(th.nn.functional.mse_loss(th.tanh(mu), th.as_tensor(act, device=device)))
+            print(f"[bc-pretrain] epoch {ep + 1}/{int(epochs)}  action_mse={a_mse:.5f}")
+    print(f"[bc-pretrain] acteur pré-entraîné sur {n} paires (obs, action) MILP.")
+    return n
+
+
 def train_sac(env, config: dict, eval_env=None, output_dir=None):
     """Train a SAC agent on the given environment.
 
     Args:
-        eval_env: optional validation env. Si fourni (avec ``output_dir``), un EvalCallback
-            sélectionne le meilleur checkpoint sur la validation (best_model.zip +
-            best_vecnormalize.pkl), au lieu de ne garder que le modèle final.
+        eval_env: optional validation env. Si fourni (avec ``output_dir``), un callback
+            sélectionne le meilleur checkpoint sur le coût net ajusté de validation
+            (best_model.zip + best_vecnormalize.pkl), au lieu de ne garder que le modèle final.
 
     Returns:
         (model, episode_rewards, vec_env): trained SB3 model, list of episode rewards,
@@ -56,6 +105,38 @@ def train_sac(env, config: dict, eval_env=None, output_dir=None):
         sac_kwargs["policy_kwargs"] = policy_kwargs
 
     model = SAC("MlpPolicy", train_env, **sac_kwargs)
+
+    # Fenêtre du MILP enseignant (jours) — partagée par le warm-start et le BC. >1 = arbitrage
+    # multi-jours (charger la nuit pour le lendemain), invisible avec une fenêtre 1-jour.
+    milp_window_days = int(t_cfg.get("milp_window_days", 1))
+
+    # Warm-start optionnel : amorcer le replay buffer avec le dispatch MILP roulant pour injecter
+    # le comportement d'arbitrage que l'exploration ne découvre pas. Requiert des obs BRUTES
+    # (norm_obs=norm_reward=False) car les transitions stockées doivent matcher l'entrée policy.
+    if t_cfg.get("warm_start_milp", False):
+        if norm_obs or norm_reward:
+            print("[warm-start] SKIP : warm_start_milp exige norm_obs=norm_reward=False "
+                  "(obs du buffer ≠ entrée policy sinon).")
+        else:
+            from baselines.milp_dispatch import prefill_replay_buffer_with_milp
+            prefill_replay_buffer_with_milp(model, env, config,
+                                            max_windows=t_cfg.get("warm_start_max_days"),
+                                            window_days=milp_window_days)
+
+    # Pré-entraînement BC de l'acteur (le plus haut potentiel : non dilué dans le buffer).
+    # Mêmes obs brutes requises que le warm-start.
+    bc_epochs = int(t_cfg.get("bc_pretrain_epochs", 0))
+    if bc_epochs > 0:
+        if norm_obs or norm_reward:
+            print("[bc-pretrain] SKIP : bc_pretrain_epochs exige norm_obs=norm_reward=False.")
+        else:
+            _bc_pretrain_actor(
+                model, env, config,
+                epochs=bc_epochs,
+                lr=float(t_cfg.get("bc_pretrain_lr", t_cfg["learning_rate"])),
+                batch_size=int(t_cfg.get("bc_pretrain_batch", t_cfg["batch_size"])),
+                window_days=milp_window_days,
+            )
 
     callbacks, reward_logger = build_callback(eval_env, t_cfg, output_dir, t_cfg["total_timesteps"])
     model.learn(total_timesteps=t_cfg["total_timesteps"], callback=callbacks)

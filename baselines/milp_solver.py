@@ -49,7 +49,7 @@ def run_milp(env, config: dict) -> dict:
     constraints.append(soc[0] == init_soc)
 
     for t in range(T):
-        # bilan corrigé : Pp_used = pv − Pcurt ; la puissance fantôme s'ajoute à l'offre
+        # bilan corrigé : Pp_used = pv - Pcurt ; la puissance fantôme s'ajoute à l'offre
         constraints.append(Pg[t] == load_vals[t] - (pv_vals[t] - Pcurt[t]) - Pb[t] - P_phantom[t])
         constraints.append(Pg[t] == P_imp[t] - P_exp[t])
         constraints.append(Pcurt[t] <= pv_vals[t])
@@ -69,6 +69,13 @@ def run_milp(env, config: dict) -> dict:
     b = cp.Variable(T, boolean=True)  # b[t]=1 → discharge, b[t]=0 → charge
 
     constraints.append(Pb == Pb_discharge - Pb_charge)
+
+    # Contrainte EDF : interdiction de charger la batterie depuis le réseau. La batterie ne
+    # peut absorber que le surplus PV (PV au-delà de la charge instantanée). pv/load sont des
+    # données ⇒ borne constante, donc linéaire. Empêche tout import réseau d'alimenter la
+    # batterie ET toute « libération » de PV vers la batterie pour l'arbitrage HC→soir.
+    pv_surplus = np.maximum(0.0, pv_vals - load_vals)
+    constraints.append(Pb_charge <= pv_surplus)
 
     for t in range(T):
         soc_change = (Pb_charge[t] * eta_c - Pb_discharge[t] / eta_d) * delta_t_h / capacity
