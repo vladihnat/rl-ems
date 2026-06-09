@@ -1,8 +1,11 @@
-# Redimensionnement "autoconsommation communautaire" autour d'une batterie 400 kWh.
-# Système cohérent avec les profils réels (charge pointe ~118 kW, PV réduit ~181 kW crête) :
-# puissance batterie 0.25C, réseau dimensionné sur la pointe de charge, PV ~1.5x la charge.
+# A/B PROPRE de l'observation enrichie : copie VERBATIM d'exp10_Batt400 + le forecast
+# du prix d'EXPORT en observation comme SEUL changement (observation.price_export_forecast).
+# L'obs contenait déjà time-of-day, forecast PV, forecast charge et forecast prix d'IMPORT,
+# mais PAS le forecast du prix d'export (grille CoutsProd, ~2.5x de variation sur la journée),
+# qui est le signal d'arbitrage pour timer les exports.
+# Compare results/exp13_exportfc vs results/exp10_seeds -> effet net du forecast export.
 experiment:
-  name: exp_10_Batt400
+  name: exp_13_Batt400_exportfc
   seed: 40
 
 time:
@@ -17,6 +20,7 @@ data:
 
 observation:
   load_forecast: true
+  price_export_forecast: true      # SEUL changement vs exp10 : forecast prix d'export en obs
 
 battery:
   capacity_kwh: 400.0
@@ -35,7 +39,7 @@ grid:
   price_type: step_hp_hc           # ou step_pointe pour le modèle 1
   price_hp: 0.2475                 # €/kWh — Tarif Bleu HP TTC Corse (fév 2024)
   price_hc: 0.1895                 # €/kWh — Tarif Bleu HC TTC Corse (fév 2024)
-  hc_midday: true                  # activer le créneau HC 12h-15h | modele 3 
+  hc_midday: true                  # activer le créneau HC 12h-15h | modele 3
 
 load:
   type: real

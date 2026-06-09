@@ -11,6 +11,7 @@ tests/
 monitoring/runs/*
 scratch/ 
 # cluster/
+plans_claude/
 
 temp_md/
 # --- Fichiers exclus ---
@@ -25,7 +26,7 @@ data/*.csv
 explore_pymgrid25.py
 test_compat.py
 cluster/ServiceHPC_SiteSPE.pdf
-
+configs/sweeps/
 
 rl_amelioration.md
 plan_actions.md 

@@ -1,0 +1,50 @@
+[
+  {
+    "index": 0,
+    "config": "configs/sweeps/exp15_randsoc/run_000.yaml",
+    "params_override": {
+      "random_soc": false,
+      "seed": 40
+    }
+  },
+  {
+    "index": 1,
+    "config": "configs/sweeps/exp15_randsoc/run_001.yaml",
+    "params_override": {
+      "random_soc": true,
+      "seed": 40
+    }
+  },
+  {
+    "index": 2,
+    "config": "configs/sweeps/exp15_randsoc/run_002.yaml",
+    "params_override": {
+      "random_soc": false,
+      "seed": 41
+    }
+  },
+  {
+    "index": 3,
+    "config": "configs/sweeps/exp15_randsoc/run_003.yaml",
+    "params_override": {
+      "random_soc": true,
+      "seed": 41
+    }
+  },
+  {
+    "index": 4,
+    "config": "configs/sweeps/exp15_randsoc/run_004.yaml",
+    "params_override": {
+      "random_soc": false,
+      "seed": 42
+    }
+  },
+  {
+    "index": 5,
+    "config": "configs/sweeps/exp15_randsoc/run_005.yaml",
+    "params_override": {
+      "random_soc": true,
+      "seed": 42
+    }
+  }
+]

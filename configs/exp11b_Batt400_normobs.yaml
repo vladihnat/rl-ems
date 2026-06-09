@@ -69,6 +69,7 @@ training:
   gradient_steps: 1                # = defaut SB3
   net_arch: [256, 256]             # = defaut SB3 ; axe de sweep
   train_split: 0.8
+  val_split:   0.2                 # tranche de validation (du train) pour la sélection best-model
   split_method: temporal
   random_soc:  false
   norm_obs:    true                # SEUL changement de comportement vs exp10

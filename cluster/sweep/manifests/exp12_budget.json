@@ -1,0 +1,50 @@
+[
+  {
+    "index": 0,
+    "config": "configs/sweeps/exp12_budget/run_000.yaml",
+    "params_override": {
+      "total_timesteps": 1000000,
+      "seed": 40
+    }
+  },
+  {
+    "index": 1,
+    "config": "configs/sweeps/exp12_budget/run_001.yaml",
+    "params_override": {
+      "total_timesteps": 2000000,
+      "seed": 40
+    }
+  },
+  {
+    "index": 2,
+    "config": "configs/sweeps/exp12_budget/run_002.yaml",
+    "params_override": {
+      "total_timesteps": 1000000,
+      "seed": 41
+    }
+  },
+  {
+    "index": 3,
+    "config": "configs/sweeps/exp12_budget/run_003.yaml",
+    "params_override": {
+      "total_timesteps": 2000000,
+      "seed": 41
+    }
+  },
+  {
+    "index": 4,
+    "config": "configs/sweeps/exp12_budget/run_004.yaml",
+    "params_override": {
+      "total_timesteps": 1000000,
+      "seed": 42
+    }
+  },
+  {
+    "index": 5,
+    "config": "configs/sweeps/exp12_budget/run_005.yaml",
+    "params_override": {
+      "total_timesteps": 2000000,
+      "seed": 42
+    }
+  }
+]

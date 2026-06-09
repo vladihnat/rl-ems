@@ -1,0 +1,50 @@
+[
+  {
+    "index": 0,
+    "config": "configs/sweeps/exp16_warmstart/run_000.yaml",
+    "params_override": {
+      "warm_start_milp": false,
+      "seed": 40
+    }
+  },
+  {
+    "index": 1,
+    "config": "configs/sweeps/exp16_warmstart/run_001.yaml",
+    "params_override": {
+      "warm_start_milp": true,
+      "seed": 40
+    }
+  },
+  {
+    "index": 2,
+    "config": "configs/sweeps/exp16_warmstart/run_002.yaml",
+    "params_override": {
+      "warm_start_milp": false,
+      "seed": 41
+    }
+  },
+  {
+    "index": 3,
+    "config": "configs/sweeps/exp16_warmstart/run_003.yaml",
+    "params_override": {
+      "warm_start_milp": true,
+      "seed": 41
+    }
+  },
+  {
+    "index": 4,
+    "config": "configs/sweeps/exp16_warmstart/run_004.yaml",
+    "params_override": {
+      "warm_start_milp": false,
+      "seed": 42
+    }
+  },
+  {
+    "index": 5,
+    "config": "configs/sweeps/exp16_warmstart/run_005.yaml",
+    "params_override": {
+      "warm_start_milp": true,
+      "seed": 42
+    }
+  }
+]
