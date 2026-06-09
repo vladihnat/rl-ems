@@ -169,8 +169,20 @@ class PriceSignal:
 
         If the window exceeds the array length the last known price is repeated.
         """
+        return self._forecast(self.import_prices, step_idx, horizon)
+
+    def get_export_forecast(self, step_idx: int, horizon: int) -> np.ndarray:
+        """Return export prices for the next `horizon` steps starting at step_idx.
+
+        Miroir de ``get_import_forecast`` : le prix d'export (grille CoutsProd) varie
+        fortement sur la journée — son forecast est le signal d'arbitrage pour timer les
+        exports. Pad avec la dernière valeur connue si l'horizon dépasse les données.
+        """
+        return self._forecast(self.export_prices, step_idx, horizon)
+
+    @staticmethod
+    def _forecast(arr: np.ndarray, step_idx: int, horizon: int) -> np.ndarray:
         end = step_idx + horizon
-        arr = self.import_prices
         if end <= len(arr):
             return arr[step_idx:end].astype(np.float32)
         tail = arr[step_idx:].astype(np.float32)

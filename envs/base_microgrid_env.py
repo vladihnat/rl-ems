@@ -60,6 +60,7 @@ class MicrogridEnv(gym.Env):
         self.max_discharge_kw = config["battery"]["max_discharge_kw"]
 
         self._load_forecast_in_obs = config.get("observation", {}).get("load_forecast", False)
+        self._price_export_fc_in_obs = config.get("observation", {}).get("price_export_forecast", False)
         self._spread_penalty = config["reward"].get("spread_penalty", False)
         self._sigma_bat = config["reward"].get("sigma_bat", 0.0)
         self._random_soc = config.get("training", {}).get("random_soc", False)
@@ -67,7 +68,15 @@ class MicrogridEnv(gym.Env):
 
         price_forecast_dim = self.horizon_steps if self.price_signal.has_forecast else 0
         load_forecast_dim = self.horizon_steps if self._load_forecast_in_obs else 0
-        obs_dim = 9 + self.horizon_steps + load_forecast_dim + price_forecast_dim
+        export_forecast_dim = (
+            self.horizon_steps
+            if (self._price_export_fc_in_obs and self.price_signal.has_forecast)
+            else 0
+        )
+        obs_dim = (
+            9 + self.horizon_steps + load_forecast_dim
+            + price_forecast_dim + export_forecast_dim
+        )
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
         )
@@ -101,6 +110,8 @@ class MicrogridEnv(gym.Env):
             parts.append(self.load.get_forecast(self.step_index, self.horizon_steps))
         if self.price_signal.has_forecast:
             parts.append(self.price_signal.get_import_forecast(self.step_index, self.horizon_steps))
+        if self._price_export_fc_in_obs and self.price_signal.has_forecast:
+            parts.append(self.price_signal.get_export_forecast(self.step_index, self.horizon_steps))
 
         return np.concatenate(parts)
 
@@ -127,6 +138,11 @@ class MicrogridEnv(gym.Env):
         return self._get_obs(), {}
 
     def step(self, action):
+        # Lues AVANT le calcul de Pb_command : la contrainte EDF ci-dessous borne la charge
+        # au surplus PV instantané (pv - load).
+        pv_t = self.pv.get_irradiance(self.step_index)
+        load_t = self.load.get_load(self.step_index)
+
         action_val = float(np.clip(action[0], -1.0, 1.0))
 
         if action_val < 0:
@@ -134,10 +150,15 @@ class MicrogridEnv(gym.Env):
         else:
             Pb_command = action_val * self.max_discharge_kw
 
-        Pb_effective, new_soc = self.battery.step(Pb_command, self.delta_t_h)
+        # Contrainte EDF : interdiction de charger la batterie depuis le réseau. La batterie
+        # ne peut absorber que le surplus PV (pv - load). Pb_command < 0 = charge ; on borne
+        # sa magnitude au surplus (si pv ≤ load, surplus = 0 ⇒ charge interdite). Identique à
+        # la borne MILP (Pb_charge ≤ max(0, pv - load)) pour que RL et MILP modélisent la même
+        # physique. Ainsi la charge ne provoque jamais d'import réseau.
+        if Pb_command < 0.0:
+            Pb_command = max(Pb_command, -max(0.0, pv_t - load_t))
 
-        pv_t = self.pv.get_irradiance(self.step_index)
-        load_t = self.load.get_load(self.step_index)
+        Pb_effective, new_soc = self.battery.step(Pb_command, self.delta_t_h)
 
         # Bilan brut (non borné). P_grid_raw < 0 ⇒ surplus à exporter.
         P_grid_raw = load_t - pv_t - Pb_effective
