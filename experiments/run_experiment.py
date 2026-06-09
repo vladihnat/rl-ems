@@ -55,9 +55,10 @@ def plot_training_curves(episode_rewards: list, output_path: str, algo_name: str
 
 
 def plot_eval_curve(output_dir: str, output_path: str):
-    """Trace la courbe de reward sur la VALIDATION (``evaluations.npz`` d'EvalCallback).
+    """Trace la courbe du COÛT NET AJUSTÉ de validation (``evaluations.npz``).
 
-    Révèle le début du sur-apprentissage (pic de validation puis déclin), preuve visuelle
+    C'est le critère de sélection best-model (plus bas = mieux). Révèle le début du
+    sur-apprentissage (creux de validation puis remontée du coût), preuve visuelle
     directe du diagnostic. No-op s'il n'y a pas de tranche de validation.
     """
     npz = os.path.join(output_dir, "evaluations.npz")
@@ -65,14 +66,16 @@ def plot_eval_curve(output_dir: str, output_path: str):
         return
     data = np.load(npz)
     ts = data["timesteps"]
-    results = data["results"].mean(axis=1)
+    results = data["results"]
+    if results.ndim > 1:                       # rétro-compat (ancien format n_evals×n_episodes)
+        results = results.mean(axis=1)
     fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(ts, results, marker=".", label="Validation reward")
-    best_i = int(np.argmax(results))
+    ax.plot(ts, results, marker=".", label="Validation net cost adj.")
+    best_i = int(np.argmin(results))           # coût : meilleur = minimum
     ax.axvline(ts[best_i], color="green", ls="--", alpha=0.7,
-               label=f"best @ {int(ts[best_i])} ({results[best_i]:.0f})")
+               label=f"best @ {int(ts[best_i])} ({results[best_i]:.1f})")
     ax.set_xlabel("Timestep")
-    ax.set_ylabel("Validation episode reward")
+    ax.set_ylabel("Validation net cost adj. (EUR, lower = better)")
     ax.set_title("Validation Curve (best-model selection)")
     ax.legend()
     ax.grid(True, alpha=0.3)
@@ -112,6 +115,12 @@ def main():
 
     print("\n[1/5] Creating environments...")
     train_env, val_env, test_env, cfg = make_env(args.config, with_val=True)
+    # Garde-fou : l'éval (val/test) DOIT partir d'un SoC fixe = init_soc (= celui du MILP),
+    # sinon gap_best/gap_final sont incomparables et la comparaison RL↔MILP est inéquitable.
+    # random_soc ne s'applique qu'au train (cf. registry._build_env).
+    assert getattr(test_env, "_random_soc", False) is False, "test_env must NOT randomize SoC"
+    if val_env is not None:
+        assert getattr(val_env, "_random_soc", False) is False, "val_env must NOT randomize SoC"
     val_steps = val_env.max_steps if val_env is not None else 0
     print(f"  Train steps: {train_env.max_steps}, Val steps: {val_steps}, Test steps: {test_env.max_steps}")
 

@@ -7,10 +7,11 @@ comparaison entre algorithmes se fasse à obs / budget / évaluation IDENTIQUES.
 ``sac_agent.py`` n'est volontairement pas modifié (code en cours dans l'arbre git).
 """
 
+import copy
 import os
 
 import numpy as np
-from stable_baselines3.common.callbacks import BaseCallback, CallbackList, EvalCallback
+from stable_baselines3.common.callbacks import BaseCallback, CallbackList
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from evaluation.metrics import compute_metrics
@@ -32,64 +33,89 @@ class RewardLoggerCallback(BaseCallback):
         return True
 
 
-class SaveVecNormalizeOnBest(BaseCallback):
-    """Sauve les stats VecNormalize d'entraînement à chaque nouveau best.
+class BestGapEvalCallback(BaseCallback):
+    """Sélection best-model sur le COÛT NET AJUSTÉ de validation (plus bas = mieux).
 
-    SB3 2.x ``EvalCallback`` ne sauve que ``best_model.zip`` au nouveau best (PAS la
-    normalisation). Branché en ``callback_on_new_best`` pour persister les obs_rms
-    courantes, afin que l'éval test du best-model utilise les bonnes statistiques.
+    Remplace l'``EvalCallback`` SB3 (qui sélectionnait sur le *reward* de validation —
+    un proxy bruité de l'objectif économique). ``net_cost_adjusted = net_cost +
+    phantom_penalty·phantom_kWh`` est l'objectif réel et **intègre la garde phantom** :
+    un checkpoint qui ne sert pas la charge prend +VOLL et n'est jamais retenu. Le coût
+    MILP-val étant constant, minimiser ce coût ≡ minimiser ``relative_gap_adjusted``
+    (sélection « sur le gap », sans solve MILP redondant à chaque éval).
+
+    À chaque ``eval_freq`` pas : rollout déterministe sur la tranche val via
+    ``evaluate_policy`` (mêmes stats VecNormalize qu'à l'entraînement, synchronisées et
+    en mode éval). Sauve ``best_model.zip`` + ``best_vecnormalize.pkl`` au nouveau best,
+    et écrit ``evaluations.npz`` (courbe de validation = détection du sur-apprentissage).
     """
 
-    def __init__(self, save_path: str, verbose: int = 0):
+    def __init__(self, eval_env, norm_obs: bool, output_dir: str,
+                 eval_freq: int, verbose: int = 0):
         super().__init__(verbose)
-        self.save_path = save_path
+        self.eval_env = eval_env          # env Gymnasium brut (tranche val)
+        self.norm_obs = norm_obs
+        self.eval_freq = max(1, int(eval_freq))
+        self.best_cost = np.inf
+        self.best_model_path = os.path.join(output_dir, "best_model.zip")
+        self.best_vec_path = os.path.join(output_dir, "best_vecnormalize.pkl")
+        self.npz_path = os.path.join(output_dir, "evaluations.npz")
+        self._timesteps: list = []
+        self._costs: list = []
+        self._served: list = []
+
+    def _make_eval_vecnorm(self):
+        """VecNormalize val en mode éval, stats synchronisées depuis l'env d'entraînement."""
+        if not self.norm_obs:
+            return None
+        eval_venv = VecNormalize(
+            DummyVecEnv([lambda: self.eval_env]),
+            norm_obs=True, norm_reward=False, training=False,
+        )
+        train_venv = self.model.get_vec_normalize_env()
+        if train_venv is not None:
+            eval_venv.obs_rms = copy.deepcopy(train_venv.obs_rms)
+        return eval_venv
 
     def _on_step(self) -> bool:
-        # self.model peut ne pas être initialisé sur le child ; fallback via parent (EvalCallback).
-        model = getattr(self, "model", None) or getattr(getattr(self, "parent", None), "model", None)
-        if model is not None:
-            venv = model.get_vec_normalize_env()
-            if venv is not None:
-                venv.save(self.save_path)
+        if self.n_calls % self.eval_freq != 0:
+            return True
+        vecnorm = self._make_eval_vecnorm()
+        metrics = evaluate_policy(self.model, self.eval_env, vecnorm)
+        cost = float(metrics["net_cost_adjusted"])
+        self._timesteps.append(int(self.num_timesteps))
+        self._costs.append(cost)
+        self._served.append(float(metrics["served_load_ratio"]))
+        if cost < self.best_cost:
+            self.best_cost = cost
+            self.model.save(self.best_model_path)
+            if vecnorm is not None:
+                vecnorm.save(self.best_vec_path)
+            if self.verbose:
+                print(f"[best-model] new best @ {self.num_timesteps}: "
+                      f"net_cost_adj={cost:.2f}  served={metrics['served_load_ratio']:.4f}")
         return True
+
+    def _on_training_end(self) -> None:
+        if self._timesteps:
+            np.savez(
+                self.npz_path,
+                timesteps=np.array(self._timesteps),
+                results=np.array(self._costs),        # coût net ajusté (plus bas = mieux)
+                served=np.array(self._served),
+            )
 
 
 def make_eval_callback(eval_env, t_cfg: dict, output_dir, total_timesteps):
-    """EvalCallback partagé : sélection best-model sur une tranche de VALIDATION.
+    """Callback de sélection best-model sur une tranche de VALIDATION.
 
-    - enveloppe ``eval_env`` en VecNormalize (mêmes flags qu'à l'entraînement,
-      ``training=False``, ``norm_reward=False``) ⇒ EvalCallback synchronise les stats
-      train→val à chaque éval (``sync_envs_normalization``) ;
-    - sauve ``best_model.zip`` (EvalCallback) + ``best_vecnormalize.pkl``
-      (``callback_on_new_best``) dans ``output_dir`` ;
-    - ``log_path`` ⇒ ``evaluations.npz`` (courbe de validation = détection du sur-apprentissage).
-
-    Retourne ``None`` si pas d'env de validation (comportement legacy : aucune sélection).
+    Sélectionne sur ``net_cost_adjusted`` (= gap, garde phantom incluse). Retourne
+    ``None`` s'il n'y a pas d'env de validation (comportement legacy : aucune sélection).
     """
     if eval_env is None or output_dir is None:
         return None
     norm_obs = t_cfg.get("norm_obs", False)
-    norm_reward = t_cfg.get("norm_reward", False)
-    if norm_obs or norm_reward:
-        eval_venv = VecNormalize(
-            DummyVecEnv([lambda: eval_env]),
-            norm_obs=norm_obs, norm_reward=False, training=False,
-        )
-        on_best = SaveVecNormalizeOnBest(os.path.join(output_dir, "best_vecnormalize.pkl"))
-    else:
-        eval_venv = eval_env
-        on_best = None
     eval_freq = max(2000, int(total_timesteps) // 100)   # ~100 évals quel que soit le budget
-    return EvalCallback(
-        eval_venv,
-        best_model_save_path=output_dir,
-        log_path=output_dir,
-        n_eval_episodes=1,                # 1 épisode = toute la tranche val (déterministe)
-        eval_freq=eval_freq,
-        deterministic=True,
-        warn=False,
-        callback_on_new_best=on_best,
-    )
+    return BestGapEvalCallback(eval_env, norm_obs, output_dir, eval_freq, verbose=1)
 
 
 def build_callback(eval_env, t_cfg: dict, output_dir, total_timesteps):

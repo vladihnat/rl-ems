@@ -39,6 +39,14 @@ PARAM_MAP = {
     "train_freq":     "training.train_freq",
     "gradient_steps": "training.gradient_steps",
     "total_timesteps":"training.total_timesteps",
+    # Leviers comportementaux (exp14+) :
+    "learning_starts":"training.learning_starts",
+    "random_soc":     "training.random_soc",
+    "warm_start_milp":"training.warm_start_milp",
+    # Behavior cloning depuis le MILP (exp17+) :
+    "bc_pretrain_epochs": "training.bc_pretrain_epochs",
+    "bc_pretrain_lr":     "training.bc_pretrain_lr",
+    "milp_window_days":   "training.milp_window_days",
 }
 
 ROOT = Path(__file__).resolve().parents[2]
