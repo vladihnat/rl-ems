@@ -215,7 +215,7 @@ def plot_validation_milp(
             label="import cost (+)")
     ax4.bar(t, cost_exp, width=width, align="edge",
             color=_C_COST_EXP, edgecolor="none", alpha=0.75,
-            label="export revenue (−)")
+            label="export revenue (-)")
     ax4.axhline(0.0, color="grey", linewidth=0.8, alpha=0.5)
     ax4.set_ylabel("Step cost (€)")
     ax4.grid(True, axis="y", alpha=0.3)

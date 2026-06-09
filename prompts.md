@@ -1197,26 +1197,26 @@ Monitoring enhancement — columns, validation, plots
     Le bilan de puissance peut être physiquement violé quand le surplus PV dépasse la
     limite d'export et que la batterie ne peut plus absorber :
 
-    - **Côté env** (`envs/base_microgrid_env.py`) : `P_grid = clip(Pl − Pp − Pb, …)` est
+    - **Côté env** (`envs/base_microgrid_env.py`) : `P_grid = clip(Pl - Pp - Pb, …)` est
       un *fail-soft* qui fait disparaître silencieusement l'excès (résidu Kirchhoff ≠ 0).
-    - **Côté MILP** (`baselines/milp_solver.py`) : l'égalité `Pg == Pl − Pp − Pb` couplée
+    - **Côté MILP** (`baselines/milp_solver.py`) : l'égalité `Pg == Pl - Pp - Pb` couplée
       à `P_exp ≤ max_exp` rend le problème **infaisable** (*fail-hard*, `RuntimeError`)
-      dès qu'un step exige `−(Pp − Pl + Pb) > max_exp`.
+      dès qu'un step exige `-(Pp - Pl + Pb) > max_exp`.
 
     Remède commun : introduire une variable explicite de **curtailment PV** `Pcurt ≥ 0`,
     de sens physique direct (l'onduleur écrête le PV).
 
     ## Formule de curtailment (⚠️ attention au signe)
 
-    `P_grid_raw = load − pv − Pb_effective` (bilan non borné ; `< 0` ⇒ surplus à exporter).
+    `P_grid_raw = load - pv - Pb_effective` (bilan non borné ; `< 0` ⇒ surplus à exporter).
 
     ```
-    Pcurt = max(0, pv + Pb_effective − load − max_export)
-          = max(0, −P_grid_raw − max_export)
+    Pcurt = max(0, pv + Pb_effective - load - max_export)
+          = max(0, -P_grid_raw - max_export)
     ```
 
     **Propriété clé à exploiter pour un code propre :**
-    `clip(P_grid_raw + Pcurt, −max_export, max_import) ≡ clip(P_grid_raw, −max_export, max_import)`.
+    `clip(P_grid_raw + Pcurt, -max_export, max_import) ≡ clip(P_grid_raw, -max_export, max_import)`.
     Donc `P_grid` et `r_eco` sont **identiques** dans les deux modes ; seul `r_curt`
     diffère. C'est une ablation propre (différence uniquement dans la reward).
 
@@ -1229,7 +1229,7 @@ Monitoring enhancement — columns, validation, plots
       Numériquement identique au comportement actuel côté export, mais `Pcurt` est
       désormais **calculé et tracé**.
     - **`penal`** : même `P_grid` / `r_eco` que `clip`, plus une pénalité explicite
-      `r_curt = −price_export × Pcurt × Δt` ajoutée à la reward (l'énergie gaspillée
+      `r_curt = -price_export × Pcurt × Δt` ajoutée à la reward (l'énergie gaspillée
       coûte autant qu'un kWh non vendu). Pas de double comptage : `r_eco` est déjà capé
       par le clip ; `r_curt` pénalise l'énergie *au-delà* du cap.
 
@@ -1270,7 +1270,7 @@ Monitoring enhancement — columns, validation, plots
 
       # Curtailment PV côté export : l'onduleur écrête le PV quand le surplus
       # dépasse la limite d'export et que la batterie ne peut plus absorber.
-      # Signe : Pcurt = max(0, pv + Pb − load − max_export) = max(0, −P_grid_raw − max_export)
+      # Signe : Pcurt = max(0, pv + Pb - load - max_export) = max(0, -P_grid_raw - max_export)
       Pcurt = max(0.0, -P_grid_raw - self.max_export_kw)
 
       # Côté import : vraie limite réseau (charge non satisfaite), conservée en clip.
@@ -1316,12 +1316,12 @@ Monitoring enhancement — columns, validation, plots
       constraints.append(soc[0] == init_soc)
 
       for t in range(T):
-          # bilan corrigé : Pp_used = pv − Pcurt
+          # bilan corrigé : Pp_used = pv - Pcurt
           constraints.append(Pg[t] == load_vals[t] - (pv_vals[t] - Pcurt[t]) - Pb[t])
           constraints.append(Pg[t] == P_imp[t] - P_exp[t])
           constraints.append(Pcurt[t] <= pv_vals[t])   # pas plus que le PV disponible
       ```
-    - **Objectif inchangé** (`minimize cost_import − revenue_export`).
+    - **Objectif inchangé** (`minimize cost_import - revenue_export`).
     - Ajouter dans le dict `history` : `"Pcurt": np.asarray(Pcurt.value, dtype=np.float64),`.
 
     ### 4. `monitoring/run_milp_optimization_example.py`
@@ -1384,7 +1384,7 @@ Monitoring enhancement — columns, validation, plots
       `grid.max_export_kw`, p. ex. à `0.5`, sur le config exp01 chargé puis modifié
       en mémoire, et/ou en injectant un step à fort PV) **asserter** :
       - **Bilan corrigé** sur tous les steps d'un rollout :
-        `abs((Pl − (Pp − Pcurt) − Pb) − Pg) ≤ 1e-6` (résidu nul, plus de fuite silencieuse).
+        `abs((Pl - (Pp - Pcurt) - Pb) - Pg) ≤ 1e-6` (résidu nul, plus de fuite silencieuse).
       - `Pcurt ≥ 0` et `Pcurt ≤ Pp` partout.
       - **Égalité clip ≡ penal** sur `P_grid` et `r_eco` step par step, et
         `reward_penal ≤ reward_clip` (strictement inférieure dès que `Pcurt > 0`),
@@ -1459,7 +1459,7 @@ Plan — Diagnostiquer & observer l'anomalie RL < MILP (exp_testCluster)
 
     Sur results/exp_testCluster (config configs/expTestCluster.yaml, RL SAC entraîné sur une
     config sous-dimensionnée : import réseau 20 kW, batterie 40 kWh), le RL affiche un
-    net_cost inférieur au MILP (244.89 € vs 257.51 €, −4.9 %), ce qui est contre-intuitif
+    net_cost inférieur au MILP (244.89 € vs 257.51 €, -4.9 %), ce qui est contre-intuitif
     puisque le MILP est censé être optimal.
 
     Cause racine identifiée (analyse de metrics.json + lecture du pipeline) :
@@ -1468,9 +1468,9 @@ Plan — Diagnostiquer & observer l'anomalie RL < MILP (exp_testCluster)
     n'apparaît nulle part dans le coût. Or sur le test set ~47 % des pas requièrent du phantom :
     - MILP : phantom = 1258.95 kWh (objectif pénalise le phantom à 1000 €/kWh → il priorise de
     servir la charge, importe 2158 kWh).
-    - RL : phantom ≈ 1505 kWh (déduit de total_reward ≈ −1000 × E_phantom) → laisse ~246 kWh
-    de charge en plus non servie, importe 2097 kWh (−61 kWh ≈ −12.3 € à ~0.2 €/kWh), ce qui
-    explique exactement l'écart de net_cost (−12.62 €).
+    - RL : phantom ≈ 1505 kWh (déduit de total_reward ≈ -1000 × E_phantom) → laisse ~246 kWh
+    de charge en plus non servie, importe 2097 kWh (-61 kWh ≈ -12.3 € à ~0.2 €/kWh), ce qui
+    explique exactement l'écart de net_cost (-12.62 €).
 
     ➜ Le RL n'est pas meilleur : il « triche » en laissant ~20 % de charge en plus non servie.
     net_cost et self_consumption_rate récompensent ce comportement ; les total_reward sont en
@@ -1492,7 +1492,7 @@ Plan — Diagnostiquer & observer l'anomalie RL < MILP (exp_testCluster)
     - evaluation/metrics.py:compute_metrics — ajouter un paramètre phantom_penalty: float = 1e3.
     Quand "P_phantom" in history, calculer et toujours retourner :
       - phantom_energy_kwh, phantom_steps
-      - served_load_ratio = (total_load_energy − phantom_energy_kwh) / total_load_energy (garde div0)
+      - served_load_ratio = (total_load_energy - phantom_energy_kwh) / total_load_energy (garde div0)
       - net_cost_adjusted = net_cost + phantom_penalty * phantom_energy_kwh (coût VOLL de la charge
     non servie — la seule grandeur comparable entre politiques à phantom différent).
     Sans P_phantom : phantom_energy_kwh=0, served_load_ratio=1.0, net_cost_adjusted=net_cost.
@@ -1502,7 +1502,7 @@ Plan — Diagnostiquer & observer l'anomalie RL < MILP (exp_testCluster)
     (info["P_phantom"]/info["Pcurt"] existent déjà — base_microgrid_env.py:230-231.)
     - baselines/milp_solver.py — rendre total_reward comparable : la history["reward"]
     (l. 113) ne contient que r_eco_sol ; ajouter la pénalité phantom
-    history["reward"] = r_eco_sol − phantom_penalty * P_phantom_sol * delta_t_h. Passer
+    history["reward"] = r_eco_sol - phantom_penalty * P_phantom_sol * delta_t_h. Passer
     phantom_penalty à compute_metrics et supprimer le calcul manuel dupliqué de
     phantom_energy_kwh/phantom_steps (l. 131-133, désormais fournis par compute_metrics).
     - evaluation/compare.py — ajouter au dict + au tableau imprimé + à comparison.json :

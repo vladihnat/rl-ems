@@ -27,7 +27,7 @@ import pandas as pd
 # Shared palette — keep in lockstep with plot_monitoring.py and plot_power.py.
 _C_ACTUAL    = "#2c3e50"   # env-replayed trajectory (solid line)
 _C_MILP_PLAN = "#9b59b6"   # MILP setpoints (dashed step)
-_C_ERROR     = "#e74c3c"   # |plan − actual| fill
+_C_ERROR     = "#e74c3c"   # |plan - actual| fill
 _C_BAT_DISCH  = "#2ecc71"
 _C_BAT_CHARGE = "#3498db"
 _C_GRID_IMP   = "#7f8c8d"
@@ -116,7 +116,7 @@ def plot_monitoring_milp(
     ax_pp.plot(t, Pp_p, drawstyle="steps-post", linestyle="--",
                color=_C_MILP_PLAN, linewidth=1.5, label="Pp MILP setpoint")
     ax_pp.fill_between(t, Pp, Pp_p, color=_C_ERROR, alpha=0.18,
-                       label="|plan − actual|")
+                       label="|plan - actual|")
     ax_pp.set_ylabel("Pp (kW)")
     ax_pp.grid(True, alpha=0.3)
     ax_pp.legend(loc="upper right", fontsize=9)

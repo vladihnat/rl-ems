@@ -8,7 +8,7 @@ Voici la lecture rapide de ce que l'agent calcule et de ce qu'il optimise.
 - **Bilan de puissance réseau.** À chaque pas de temps, l'environnement calcule le résidu échangé avec le réseau :
 
   ```
-  P_grid = P_load − P_pv − P_bat
+  P_grid = P_load - P_pv - P_bat
   ```
 
   où `P_bat` est l'action de l'agent (puissance batterie, **signée** : `< 0` = charge, `> 0` = décharge). Si `P_grid > 0` le microréseau **achète** ; si `P_grid < 0` il **revend** son surplus.
@@ -17,15 +17,15 @@ Voici la lecture rapide de ce que l'agent calcule et de ce qu'il optimise.
 
   ```
   coût  = price_import * max( P_grid, 0.0)     # achat réseau (P_grid > 0)
-  revenu = price_export * max(−P_grid, 0.0)    # vente surplus (P_grid < 0)
+  revenu = price_export * max(-P_grid, 0.0)    # vente surplus (P_grid < 0)
   ```
 
   Un terme de pénalité **soft** est ajouté lorsque le SoC sort de la bande de sécurité `[SoC_min, SoC_max]` :
 
   ```
-  r_soc = − sigma_soc * (
-            max(0.0, soc_safe_min − new_soc)
-          + max(0.0, new_soc − soc_safe_max)
+  r_soc = - sigma_soc * (
+            max(0.0, soc_safe_min - new_soc)
+          + max(0.0, new_soc - soc_safe_max)
         )
   ```
 
@@ -36,7 +36,7 @@ Voici la lecture rapide de ce que l'agent calcule et de ce qu'il optimise.
 - **Dynamique du SoC.** L'état de charge évolue selon :
 
   ```
-  SoC(t+1) = SoC(t) + ( P_charge * η_charge  −  P_décharge / η_décharge ) * Δt / Capacité
+  SoC(t+1) = SoC(t) + ( P_charge * η_charge  -  P_décharge / η_décharge ) * Δt / Capacité
   ```
 
   avec les rendements de charge/décharge appliqués de manière dissymétrique (pertes dans les deux sens).
