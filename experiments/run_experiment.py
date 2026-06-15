@@ -186,6 +186,37 @@ def main():
         print("\n[5/5] Comparing results...")
         comparison = compare_results(rl_metrics, milp_metrics, output_dir)
 
+        # Gap stratifié par saison (Hiver/Été), sur le modèle évalué (best si dispo).
+        # Les sous-métriques par saison sont produites par evaluate_*/run_milp via
+        # evaluation.metrics.metrics_by_season (réutilise compute_metrics par tranche).
+        rl_by = rl_metrics.pop("by_season", {})
+        milp_by = milp_metrics.pop("by_season", {})
+        by_season = {}
+        for season in ("hiver", "ete"):
+            if season not in rl_by or season not in milp_by:
+                continue
+            rl_net, milp_net = rl_by[season]["net_cost"], milp_by[season]["net_cost"]
+            rl_adj, milp_adj = rl_by[season]["net_cost_adjusted"], milp_by[season]["net_cost_adjusted"]
+            by_season[season] = {
+                "gap": (rl_net - milp_net) / abs(milp_net) if abs(milp_net) > 1e-9 else None,
+                "gap_adjusted": (rl_adj - milp_adj) / abs(milp_adj) if abs(milp_adj) > 1e-9 else None,
+                # Gap ABSOLU (€) : toujours défini. En hiver le coût net MILP est ~0 €
+                # (faible PV → peu d'export), donc le gap RELATIF (÷|milp_net|) explose à
+                # des milliers de % : artefact de dénominateur≈0, ininterprétable. Le gap
+                # absolu reste fiable quel que soit le régime (cf. aggregate_results.py).
+                "gap_abs_eur": rl_net - milp_net,
+                "served": rl_by[season]["served_load_ratio"],
+                "phantom": rl_by[season]["phantom_energy_kwh"],
+                "rl_net_cost": rl_net,
+                "milp_net_cost": milp_net,
+                "n_steps": rl_by[season]["n_steps"],
+            }
+            g = by_season[season]["gap"]
+            g_str = f"{g:+.1%}" if g is not None else "n/a"
+            print(f"  Gap [{season}] : {g_str}  (gap_abs={by_season[season]['gap_abs_eur']:+.1f} EUR, "
+                  f"n={by_season[season]['n_steps']} steps)")
+        comparison["by_season"] = by_season
+
         # Référence : gap du modèle FINAL (diagnostic « loterie de point d'arrêt »).
         if used_best:
             final_metrics = evaluate_fn(model, test_env, _load_eval_vecnorm(vec_normalize_path))

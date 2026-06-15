@@ -3,7 +3,7 @@
 import numpy as np
 import cvxpy as cp
 
-from evaluation.metrics import compute_metrics
+from evaluation.metrics import compute_metrics, metrics_by_season, season_labels
 
 
 def run_milp(env, config: dict) -> dict:
@@ -139,6 +139,10 @@ def run_milp(env, config: dict) -> dict:
     # comparison). net_cost stays the pure grid economics recomputed from Pg_sol.
     metrics = compute_metrics(history, delta_t_h, soc_min, soc_max,
                               price_imp, price_exp, phantom_penalty)
+    labels = season_labels(env.pv.timestamps[:T])
+    metrics["by_season"] = metrics_by_season(history, labels, delta_t_h, soc_min,
+                                             soc_max, price_imp, price_exp,
+                                             phantom_penalty)
     metrics["history"] = history
     metrics["solver_status"] = prob.status
     metrics["objective_value"] = prob.value

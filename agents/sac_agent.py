@@ -5,7 +5,7 @@ from stable_baselines3 import SAC
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from agents.common import build_callback
-from evaluation.metrics import compute_metrics
+from evaluation.metrics import compute_metrics, metrics_by_season, season_labels
 
 
 def _bc_pretrain_actor(model, env, config: dict, epochs: int, lr: float,
@@ -203,5 +203,9 @@ def evaluate_sac(model, env, vec_normalize=None) -> dict:
 
     metrics = compute_metrics(history, delta_t_h, soc_min, soc_max,
                               price_import, price_export, phantom_penalty)
+    labels = season_labels(env.pv.timestamps[:T])
+    metrics["by_season"] = metrics_by_season(history, labels, delta_t_h, soc_min,
+                                             soc_max, price_import, price_export,
+                                             phantom_penalty)
     metrics["history"] = history
     return metrics

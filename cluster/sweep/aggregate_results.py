@@ -51,6 +51,7 @@ def collect(sweep: str):
             "gap_final": sel.get("gap_final"),
             "sc": rl.get("self_consumption_rate"),
             "import_kwh": rl.get("energy_imported_kwh"),
+            "by_season": comp.get("by_season", {}),
         })
     return rows
 
@@ -64,6 +65,71 @@ def _is_phantom(r) -> bool:
     return False
 
 
+def _season_is_phantom(e) -> bool:
+    """True si l'entrée saisonnière laisse de la charge non servie (gap adj. seul fiable)."""
+    if e.get("served") is not None and e["served"] < 1.0 - 1e-6:
+        return True
+    if e.get("phantom") is not None and e["phantom"] > 1e-6:
+        return True
+    return False
+
+
+def _gap_abs(e):
+    """Gap ABSOLU (€) d'une entrée saisonnière : rl_net − milp_net.
+
+    Privilégie le champ persisté ``gap_abs_eur`` (runs récents) ; sinon le recalcule
+    depuis ``rl_net_cost``/``milp_net_cost`` → fonctionne RÉTROACTIVEMENT sur les
+    metrics.json déjà écrits, sans relancer aucun run.
+    """
+    v = e.get("gap_abs_eur")
+    if v is not None:
+        return v
+    rl, mp = e.get("rl_net_cost"), e.get("milp_net_cost")
+    if rl is not None and mp is not None:
+        return rl - mp
+    return None
+
+
+def print_seasonal(rows):
+    """Récap du gap RL↔MILP stratifié par saison (Hiver/Été), moyenné sur les seeds.
+
+    Le gap RELATIF (÷|milp_net|) est ININTERPRÉTABLE quand le coût net MILP ≈ 0 €
+    (cas hiver : faible PV → peu de revenu export → ~0 € → le ratio explose à des
+    milliers de % : artefact de dénominateur≈0). On rapporte donc le gap ABSOLU (€)
+    comme métrique PRIMAIRE, fiable quel que soit le régime, et on n'affiche le %
+    relatif que lorsqu'il est fiable (|milp_net| moyen ≥ ampleur moyenne du gap absolu).
+    """
+    if not any(r["by_season"] for r in rows):
+        print("  -> par saison                  : n/a (runs sans 'by_season')")
+        return
+    for season in ("hiver", "ete"):
+        entries = [r["by_season"][season] for r in rows if season in r["by_season"]]
+        if not entries:
+            continue
+        feasible = [e for e in entries if not _season_is_phantom(e)]
+        n_flag = len(entries) - len(feasible)
+        suffix = f"   [{n_flag} '!' phantom exclue(s)]" if n_flag else ""
+
+        abs_eur = [_gap_abs(e) for e in entries]
+        gap_abs = _fmt_eur(abs_eur)
+
+        # Fiabilité du % relatif : moyenne |milp_net| vs ampleur moyenne du gap absolu.
+        # Si l'optimum coûte (en valeur abs.) moins que le gap lui-même, le ratio est
+        # dominé par un dénominateur ≈ 0 → on supprime le % (cas hiver).
+        milp_abs = [abs(e["milp_net_cost"]) for e in entries if e.get("milp_net_cost") is not None]
+        mean_milp = mean(milp_abs) if milp_abs else 0.0
+        gap_mag = [abs(x) for x in abs_eur if x is not None]
+        mean_gap = mean(gap_mag) if gap_mag else 0.0
+
+        if mean_milp >= mean_gap:
+            gap = _fmt([e.get("gap") for e in entries])
+            adj = _fmt([e.get("gap_adjusted") for e in feasible])
+            print(f"  -> [{season:<5}] gap_abs : {gap_abs}   | gap_rel : {gap}   | gap_adj : {adj}{suffix}")
+        else:
+            print(f"  -> [{season:<5}] gap_abs : {gap_abs}   | gap_rel : ininterpr. "
+                  f"(|milp_net|~{mean_milp:.1f} EUR ≈ 0, dénominateur instable){suffix}")
+
+
 def _fmt(xs):
     xs = [x for x in xs if x is not None]
     if not xs:
@@ -71,6 +137,16 @@ def _fmt(xs):
     m = mean(xs)
     s = stdev(xs) if len(xs) > 1 else 0.0
     return f"{m:+.1%} ± {s:.1%}  (n={len(xs)})"
+
+
+def _fmt_eur(xs):
+    """Comme _fmt mais en euros absolus (gap absolu saisonnier, robuste au dénominateur≈0)."""
+    xs = [x for x in xs if x is not None]
+    if not xs:
+        return "   n/a"
+    m = mean(xs)
+    s = stdev(xs) if len(xs) > 1 else 0.0
+    return f"{m:+.1f} ± {s:.1f} EUR  (n={len(xs)})"
 
 
 def main():
@@ -103,6 +179,7 @@ def main():
         print(f"  -> gap_final (brut, toutes)    : {_fmt([r['gap_final'] for r in rows])}")
         suffix = f"   [{n_flag} run(s) '!' phantom exclue(s)]" if n_flag else ""
         print(f"  -> gap_adj (best, faisables)   : {_fmt([r['gap_best_adj'] for r in feasible])}{suffix}")
+        print_seasonal(rows)
 
 
 if __name__ == "__main__":
