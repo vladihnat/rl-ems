@@ -4,7 +4,7 @@ Python port of the MATLAB `MicroGrid.Monitoring` matrix and `monitoTable`
 dependent property. One row per RL decision step; the row is written
 (indexed) at the moment the agent acts on the env.
 
-Column layout (extended schema, 23 columns):
+Column layout (extended schema, 25 columns):
     SHARED (always populated by RL or MILP rollouts):
         t          unix seconds (float64)
         Pp         PV production [kW], >= 0
@@ -20,7 +20,11 @@ Column layout (extended schema, 23 columns):
         r_soc      SoC penalty (0 when no violation)
         r_bat_power  quadratic battery power penalty = -sigma_bat * (Pb/Pb_max)² (0 when sigma_bat = 0)
         r_spread   spread penalty on useless discharge (0 when spread_penalty=False)
-        reward     total step reward = r_eco + r_soc + r_curt + r_bat_power + r_spread
+        r_store    PBRS store-value shaping = γ·Φ(s')−Φ(s), Φ=σ·v(t)·E_util (0 when store_value=False)
+        r_export_stock  one-sided opportunity-cost penalty on battery-sourced export
+                   = -σ_xs·max(0, max_future_import − price_exp)·e_batt_exp·dt
+                   (0 when sigma_export_stock=0; 0 on optimal trajectories)
+        reward     total step reward = r_eco + r_soc + r_curt + r_bat_power + r_spread + r_phantom + r_store + r_export_stock
         Pcurt      PV curtailment [kW, >=0] — power shed by inverter when
                    surplus exceeds max_export and battery is saturated
         Pph        phantom power [kW, >=0] — unserved load conjured to close the
@@ -87,6 +91,10 @@ COL_R_SPREAD     = 20
 # appended last to keep all preceding indices stable.
 COL_PPH          = 21
 COL_R_PHANTOM    = 22
+# PBRS store-value shaping reward (RL-only, 0/NaN otherwise) — appended last.
+COL_R_STORE      = 23
+# One-sided export-stock opportunity-cost penalty (RL-only, 0/NaN otherwise) — appended last.
+COL_R_EXPORT_STOCK = 24
 
 COLUMN_NAMES = [
     "t",
@@ -99,6 +107,8 @@ COLUMN_NAMES = [
     "Pcurt",
     "r_bat_power", "r_spread",
     "Pph", "r_phantom",
+    "r_store",
+    "r_export_stock",
 ]
 NUM_COLUMNS = len(COLUMN_NAMES)
 
@@ -125,6 +135,8 @@ _OPTIONAL_KEYS = {
     "r_spread":     COL_R_SPREAD,
     "pph":          COL_PPH,
     "r_phantom":    COL_R_PHANTOM,
+    "r_store":      COL_R_STORE,
+    "r_export_stock": COL_R_EXPORT_STOCK,
 }
 
 
@@ -260,7 +272,7 @@ class MonitoringTable:
 
     # ------------------------------------------------------------------ cost
 
-    def get_total_cost(self, buy_price, sell_price) -> float:
+    def get_total_cost(self, buy_price, sell_price, n_steps: int | None = None) -> float:
         """Total optimization cost over the rollout, in the same currency as the prices.
 
         cost = sum( max(Pg, 0) * buy_price * dt )  -  sum( max(-Pg, 0) * sell_price * dt )
@@ -272,8 +284,14 @@ class MonitoringTable:
         Args:
             buy_price:  scalar float or array of shape (n_steps,) in EUR/kWh.
             sell_price: scalar float or array of shape (n_steps,) in EUR/kWh.
+            n_steps: Score only the first ``n_steps`` decision steps. ``None``
+                (default) scores the whole rollout. Used for N-jours / scoring
+                sur N−1 : on simule la fenêtre complète mais on n'évalue le coût
+                que sur les premiers pas, pour exclure le dump de fin d'horizon.
         """
         pg_full = self._data[:, COL_PG]
+        if n_steps is not None:
+            pg_full = pg_full[:n_steps]
         mask = ~np.isnan(pg_full)
         if not np.any(mask):
             return 0.0

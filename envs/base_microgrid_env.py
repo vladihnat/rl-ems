@@ -66,6 +66,18 @@ class MicrogridEnv(gym.Env):
         self._random_soc = config.get("training", {}).get("random_soc", False)
         self._pb_max = max(self.max_charge_kw, self.max_discharge_kw)
 
+        # PBRS — valeur prix-aware du stock (Ng 1999). σ_store = force du shaping ; γ doit être
+        # CELUI de SAC (cf. sac_agent.py) pour que F = γ·Φ(s')−Φ(s) préserve exactement l'optimum.
+        self._store_shaping = config["reward"].get("store_value", False)
+        self._sigma_store = config["reward"].get("sigma_store", 1.0)
+        self._gamma_shaping = config.get("training", {}).get("gamma", 0.99)
+
+        # Pénalité one-sided sur l'export DE STOCK (coût d'opportunité prix-aware). 0.0 = inactif
+        # (opt-in, runs existants bit-identiques). Zéro sur l'optimum ⇒ ne déplace pas l'optimum
+        # (même philosophie que spread_penalty). Décourage de vendre le stock quand le garder
+        # éviterait un import futur plus cher (cf. _export_opportunity_cost).
+        self._sigma_export_stock = config["reward"].get("sigma_export_stock", 0.0)
+
         price_forecast_dim = self.horizon_steps if self.price_signal.has_forecast else 0
         load_forecast_dim = self.horizon_steps if self._load_forecast_in_obs else 0
         export_forecast_dim = (
@@ -137,6 +149,46 @@ class MicrogridEnv(gym.Env):
         )
         return self._get_obs(), {}
 
+    def _store_value(self, idx: int) -> float:
+        """Valeur prix-aware de l'énergie stockée à l'instant ``idx`` (€/kWh).
+
+        Meilleure opportunité de déploiement futur sur l'horizon : éviter un import (prix import
+        futur) OU exporter (prix export futur) → max sur les deux forecasts. En matinée, capte
+        déjà le pic du soir (export CoutsProd) ⇒ incite à porter l'énergie jusqu'au soir.
+        Repli sur le prix instantané si le signal n'a pas de forecast.
+        """
+        if not self.price_signal.has_forecast:
+            return max(
+                self.price_signal.get_import_price(idx),
+                self.price_signal.get_export_price(idx),
+            )
+        imp_fc = self.price_signal.get_import_forecast(idx, self.horizon_steps)
+        exp_fc = self.price_signal.get_export_forecast(idx, self.horizon_steps)
+        return max(float(imp_fc.max()), float(exp_fc.max()))
+
+    def _export_opportunity_cost(self, idx: int) -> float:
+        """Coût d'opportunité (€/kWh) d'exporter le stock à l'instant ``idx`` au lieu de le
+        garder pour éviter un import futur :  ``oc = max(0, v_imp_future − price_exp_now)``.
+
+        ``v_imp_future`` = meilleur import évitable sur l'horizon (max du forecast import,
+        comme ``_store_value`` ; repli sur le prix import instantané sans forecast). On compare
+        l'IMPORT futur (pas l'export futur) : l'objet du terme est « ne pas vendre ce qui
+        servirait à éviter un import plus cher ».
+
+        PAS de facteur rendement : l'énergie est DÉJÀ stockée, ``eta_d`` s'applique
+        identiquement à « exporter maintenant » et « éviter un import plus tard » ⇒ se
+        simplifie. Mettre ``eta_d`` sur-pénaliserait et casserait l'invariance.
+
+        ZÉRO sur l'optimum : un export de stock optimal n'a lieu que si ``price_exp ≥`` meilleur
+        import futur évitable ⇒ ``oc = 0`` ⇒ le terme ne déplace pas l'optimum (cf. r_spread).
+        """
+        price_exp_now = self.price_signal.get_export_price(idx)
+        if not self.price_signal.has_forecast:
+            v_imp = self.price_signal.get_import_price(idx)
+        else:
+            v_imp = float(self.price_signal.get_import_forecast(idx, self.horizon_steps).max())
+        return max(0.0, v_imp - price_exp_now)
+
     def step(self, action):
         # Lues AVANT le calcul de Pb_command : la contrainte EDF ci-dessous borne la charge
         # au surplus PV instantané (pv - load).
@@ -158,6 +210,7 @@ class MicrogridEnv(gym.Env):
         if Pb_command < 0.0:
             Pb_command = max(Pb_command, -max(0.0, pv_t - load_t))
 
+        soc_old = self.battery.soc  # avant battery.step, pour le potentiel PBRS Φ(s_t)
         Pb_effective, new_soc = self.battery.step(Pb_command, self.delta_t_h)
 
         # Bilan brut (non borné). P_grid_raw < 0 ⇒ surplus à exporter.
@@ -204,8 +257,35 @@ class MicrogridEnv(gym.Env):
             if Pb_effective > 0.0 and pv_surplus > 0.0:
                 r_spread = -(price_imp - price_exp) * min(Pb_effective, pv_surplus) * self.delta_t_h
 
+        # PBRS — valeur prix-aware du stock (Ng 1999) : F = γ·Φ(s') − Φ(s), Φ = σ·v(t)·E_util,
+        # avec E_util = (SoC − soc_min)·capacité. Annule le biais d'actualisation qui pousse à
+        # vider la batterie tôt, SANS déplacer l'optimum (la somme actualisée télescope en
+        # −Φ(s₀) + γ^T·Φ(s_T) ≈ −Φ(s₀)). On NE met PAS Φ(s_T)=0 (évite un artefact de dump de fin) :
+        # à t+1 = max_steps, la fenêtre forecast reste dans les données (max_steps = n_steps − H).
+        r_store = 0.0
+        if self._store_shaping:
+            cap = self.battery.capacity_kwh
+            floor = self.battery.soc_min
+            phi_t = self._sigma_store * self._store_value(self.step_index) * (soc_old - floor) * cap
+            phi_tp1 = self._sigma_store * self._store_value(self.step_index + 1) * (new_soc - floor) * cap
+            r_store = self._gamma_shaping * phi_tp1 - phi_t
+
+        # r_export_stock — coût d'opportunité one-sided sur l'export DE STOCK. e_batt_exp =
+        # export au-delà du surplus PV instantané ⇒ provient forcément de la décharge batterie.
+        # Décourage de vider la batterie à l'export quand garder le stock éviterait un import
+        # futur plus cher (cas ete_basse : export soir 0.199 < import HP 0.2475). ZÉRO sur
+        # l'optimum ⇒ ne déplace pas l'optimum (cf. r_spread). Pas de garde curtailment :
+        # décharger AUGMENTE l'export, ne libère jamais de place PV (cf. _export_opportunity_cost).
+        r_export_stock = 0.0
+        if self._sigma_export_stock > 0.0:
+            pv_surplus = max(0.0, pv_t - load_t)
+            e_batt_exp_kw = max(0.0, max(-P_grid, 0.0) - pv_surplus)
+            if e_batt_exp_kw > 0.0:
+                oc = self._export_opportunity_cost(self.step_index)
+                r_export_stock = -self._sigma_export_stock * oc * e_batt_exp_kw * self.delta_t_h
+
         # reward = r_eco + r_soc + r_curt + r_bat_power + r_spread
-        reward = r_eco + r_soc + r_curt +  r_spread + r_phantom
+        reward = r_eco + r_soc + r_curt +  r_spread + r_phantom + r_store + r_export_stock
 
         # reward = r_eco + r_soc + r_curt
 
@@ -233,6 +313,8 @@ class MicrogridEnv(gym.Env):
                     # "r_bat_power": float(r_bat_power),
                     "r_spread":  float(r_spread),
                     "r_phantom": float(r_phantom),
+                    "r_store":   float(r_store),
+                    "r_export_stock": float(r_export_stock),
                     "reward":    float(reward),
                     "pcurt":     float(Pcurt),
                     "pph":       float(P_phantom),
@@ -252,6 +334,8 @@ class MicrogridEnv(gym.Env):
             # "r_bat_power": r_bat_power,
             "r_spread": r_spread,
             "r_phantom": r_phantom,
+            "r_store": r_store,
+            "r_export_stock": r_export_stock,
             "P_phantom": P_phantom,
             "Pcurt": Pcurt,
             "pv_t": pv_t,

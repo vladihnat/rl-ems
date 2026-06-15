@@ -1,0 +1,74 @@
+[
+  {
+    "index": 0,
+    "config": "configs/sweeps/exp19_store/run_000.yaml",
+    "params_override": {
+      "sigma_store": 0.5,
+      "seed": 40
+    }
+  },
+  {
+    "index": 1,
+    "config": "configs/sweeps/exp19_store/run_001.yaml",
+    "params_override": {
+      "sigma_store": 1.0,
+      "seed": 40
+    }
+  },
+  {
+    "index": 2,
+    "config": "configs/sweeps/exp19_store/run_002.yaml",
+    "params_override": {
+      "sigma_store": 2.0,
+      "seed": 40
+    }
+  },
+  {
+    "index": 3,
+    "config": "configs/sweeps/exp19_store/run_003.yaml",
+    "params_override": {
+      "sigma_store": 0.5,
+      "seed": 41
+    }
+  },
+  {
+    "index": 4,
+    "config": "configs/sweeps/exp19_store/run_004.yaml",
+    "params_override": {
+      "sigma_store": 1.0,
+      "seed": 41
+    }
+  },
+  {
+    "index": 5,
+    "config": "configs/sweeps/exp19_store/run_005.yaml",
+    "params_override": {
+      "sigma_store": 2.0,
+      "seed": 41
+    }
+  },
+  {
+    "index": 6,
+    "config": "configs/sweeps/exp19_store/run_006.yaml",
+    "params_override": {
+      "sigma_store": 0.5,
+      "seed": 42
+    }
+  },
+  {
+    "index": 7,
+    "config": "configs/sweeps/exp19_store/run_007.yaml",
+    "params_override": {
+      "sigma_store": 1.0,
+      "seed": 42
+    }
+  },
+  {
+    "index": 8,
+    "config": "configs/sweeps/exp19_store/run_008.yaml",
+    "params_override": {
+      "sigma_store": 2.0,
+      "seed": 42
+    }
+  }
+]

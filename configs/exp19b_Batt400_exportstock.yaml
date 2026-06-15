@@ -1,0 +1,86 @@
+# Base des sweeps "coût d'opportunité d'export de stock" (exp19b). Fork d'exp19_Batt400_store
+# avec, EN PLUS du PBRS :
+#   - reward.sigma_export_stock : force d'un terme one-sided pénalisant l'export DE STOCK
+#     (décharge batterie au-delà du surplus PV) au coût d'opportunité prix-aware
+#     oc(t) = max(0, max(import futur) − price_exp). Décourage de VENDRE le stock quand le
+#     garder éviterait un import futur plus cher (cas ete_basse : export soir < import HP).
+#     ZÉRO sur l'optimum (on n'exporte le stock que si price_exp ≥ meilleur import évitable)
+#     ⇒ NE DÉPLACE PAS l'optimum, NE CASSE PAS la comparaison MILP (gap recalculé depuis P_grid).
+#     Même philosophie one-sided que spread_penalty.
+#   - PBRS conservé tel quel (store_value/sigma_store) : axe complémentaire, pas remplacé.
+# generate_sweep.py écrase sigma_export_stock / seed + experiment.name.
+experiment:
+  name: exp19b_Batt400_exportstock
+  seed: 40
+
+time:
+  delta_t_min: 15
+  horizon_h: 24
+
+data:
+  pv_csv: "data/irradiance_training.csv"
+  pv_column: "Global30_kW"
+  load_csv: "data/load_training.csv"
+  load_column: "Conso_tot"
+
+observation:
+  load_forecast: true
+  price_export_forecast: true      # signal d'arbitrage (grille CoutsProd) — hérité d'exp13
+
+battery:
+  capacity_kwh: 400.0
+  soc_min: 0.2
+  soc_max: 0.9
+  max_charge_kw: 100.0             # vs 500 : limite de puissance réaliste (C/4)
+  max_discharge_kw: 100.0          # idem ; alimente AUSSI le MILP → scénario consistant
+  efficiency_charge: 0.9
+  efficiency_discharge: 0.9
+  init_soc: 0.5
+
+grid:
+  max_import_kw: 500.0
+  max_export_kw: 500.0
+  curtailment: clip
+  price_type: step_hp_hc
+  price_hp: 0.2475
+  price_hc: 0.1895
+  hc_midday: true
+
+load:
+  type: real
+  base_load_kw: 1.0
+
+pv:
+  type: perfect
+  surface_m2: 1600.0
+  eta_ref: 0.20
+
+reward:
+  # sigma_soc / soc_safe_* : INERTES ici (soc_safe = bornes batterie + clip dans battery.step),
+  # mais clés REQUISES par base_microgrid_env.py — gardées telles quelles.
+  sigma_soc: 10.0
+  soc_safe_min: 0.2
+  soc_safe_max: 0.9
+  spread_penalty: true
+  # PBRS valeur du stock (prix-aware) :
+  store_value:  true
+  sigma_store:  1.0
+  # Coût d'opportunité one-sided sur l'export DE STOCK (axe de sweep exp19b). 0.0 = inactif
+  # (= exp19, contrôle). Zéro sur l'optimum ⇒ ne déplace pas l'optimum (cf. spread_penalty).
+  sigma_export_stock: 0.0
+
+training:
+  algorithm: SAC
+  total_timesteps: 2_000_000
+  learning_rate: 0.0003
+  batch_size: 256
+  buffer_size: 750_000
+  gamma: 0.99                       # γ partagé avec le terme PBRS (base_microgrid_env)
+  ent_coef: auto
+  learning_starts: 10000
+  train_split: 0.8
+  val_split:   0.2
+  split_method: temporal
+  random_soc:  false
+  norm_obs:    false
+  norm_reward: false
