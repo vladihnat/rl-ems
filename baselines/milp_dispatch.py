@@ -31,13 +31,22 @@ from baselines.milp_solver import run_milp
 
 
 class _WindowEnv:
-    """Shim exposant EXACTEMENT ce que ``run_milp`` lit, sur des tableaux de fenêtre."""
+    """Shim exposant EXACTEMENT ce que ``run_milp`` lit, sur des tableaux de fenêtre.
 
-    def __init__(self, pv, load, price_imp, price_exp):
+    ``timestamps`` est requis par ``run_milp`` (calcul des métriques by_season). Dans le chemin
+    fenêtré ces métriques sont ignorées (on ne lit que ``Pb_effective``), mais le shim doit les
+    fournir pour ne pas planter : on passe la tranche de timestamps réelle de la fenêtre, ou un
+    repère synthétique de bonne longueur en dernier recours.
+    """
+
+    def __init__(self, pv, load, price_imp, price_exp, timestamps=None):
         pv = np.asarray(pv, dtype=np.float64)
         load = np.asarray(load, dtype=np.float64)
         self.max_steps = len(pv)
-        self.pv = SimpleNamespace(get_irradiance=lambda t, _a=pv: float(_a[t]))
+        if timestamps is None:
+            timestamps = np.arange(len(pv), dtype="datetime64[h]")
+        self.pv = SimpleNamespace(get_irradiance=lambda t, _a=pv: float(_a[t]),
+                                  timestamps=np.asarray(timestamps))
         self.load = SimpleNamespace(get_load=lambda t, _a=load: float(_a[t]))
         self.price_signal = SimpleNamespace(
             import_prices=np.asarray(price_imp, dtype=np.float64),
@@ -45,11 +54,12 @@ class _WindowEnv:
         )
 
 
-def solve_milp_window(pv, load, price_imp, price_exp, init_soc: float, config: dict) -> np.ndarray:
+def solve_milp_window(pv, load, price_imp, price_exp, init_soc: float, config: dict,
+                      timestamps=None) -> np.ndarray:
     """Dispatch batterie ``Pb`` (kW, >0 = décharge) optimal sur la fenêtre via ``run_milp``."""
     cfg = copy.deepcopy(config)
     cfg["battery"]["init_soc"] = float(init_soc)
-    shim = _WindowEnv(pv, load, price_imp, price_exp)
+    shim = _WindowEnv(pv, load, price_imp, price_exp, timestamps=timestamps)
     metrics = run_milp(shim, cfg)
     return np.asarray(metrics["history"]["Pb_effective"], dtype=np.float64)
 
@@ -87,7 +97,9 @@ def iter_milp_actions(env, config: dict, max_windows=None, window_days: int = 1)
         load_w = np.array([env.load.get_load(idx + k) for k in range(w)], dtype=np.float64)
         pimp_w = np.asarray(env.price_signal.import_prices[idx:idx + w], dtype=np.float64)
         pexp_w = np.asarray(env.price_signal.export_prices[idx:idx + w], dtype=np.float64)
-        Pb = solve_milp_window(pv_w, load_w, pimp_w, pexp_w, float(env.battery.soc), config)
+        ts_w = np.asarray(env.pv.timestamps)[idx:idx + w]
+        Pb = solve_milp_window(pv_w, load_w, pimp_w, pexp_w, float(env.battery.soc), config,
+                               timestamps=ts_w)
         for k in range(w):
             pb = float(Pb[k])
             yield _pb_to_action(pb, max_charge, max_discharge), pb
@@ -96,19 +108,23 @@ def iter_milp_actions(env, config: dict, max_windows=None, window_days: int = 1)
 
 
 def prefill_replay_buffer_with_milp(model, env, config: dict, max_windows=None,
-                                    verbose: bool = True, window_days: int = 1) -> int:
-    """Remplit ``model.replay_buffer`` avec les transitions réelles du dispatch MILP roulant.
+                                    verbose: bool = True, window_days: int = 1,
+                                    buffer=None) -> int:
+    """Remplit un replay buffer avec les transitions réelles du dispatch MILP roulant.
 
     Args:
-        model: SAC SB3 (``model.replay_buffer`` déjà alloué).
+        model: SAC SB3 (sert à dériver l'espace obs/action ; ``model.replay_buffer`` par défaut).
         env:   env Gymnasium BRUT d'entraînement (obs non normalisées — cf. garde dans sac_agent).
         config: config complète de l'expérience.
         max_windows: limite le nb de fenêtres amorcées (None = tout l'épisode train).
         window_days: taille de la fenêtre MILP en jours (cf. ``iter_milp_actions``).
+        buffer: replay buffer cible (None = ``model.replay_buffer``). Permet de remplir un
+            **buffer démo dédié** (WS-1c, ancre persistante) avec exactement ce code vérifié.
 
     Returns:
         Nombre de transitions ajoutées.
     """
+    buf = buffer if buffer is not None else model.replay_buffer
     steps_per_day = int(24 * 60 / config["time"]["delta_t_min"])
     window_steps = max(1, int(window_days)) * steps_per_day
     max_charge = config["battery"]["max_charge_kw"]
@@ -125,14 +141,16 @@ def prefill_replay_buffer_with_milp(model, env, config: dict, max_windows=None,
         load_w = np.array([env.load.get_load(idx + k) for k in range(w)], dtype=np.float64)
         pimp_w = np.asarray(env.price_signal.import_prices[idx:idx + w], dtype=np.float64)
         pexp_w = np.asarray(env.price_signal.export_prices[idx:idx + w], dtype=np.float64)
-        Pb = solve_milp_window(pv_w, load_w, pimp_w, pexp_w, float(env.battery.soc), config)
+        ts_w = np.asarray(env.pv.timestamps)[idx:idx + w]
+        Pb = solve_milp_window(pv_w, load_w, pimp_w, pexp_w, float(env.battery.soc), config,
+                               timestamps=ts_w)
 
         done = False
         for k in range(w):
             action = _pb_to_action(float(Pb[k]), max_charge, max_discharge)
             next_obs, reward, terminated, truncated, info = env.step(action)
             done = bool(terminated or truncated)
-            model.replay_buffer.add(
+            buf.add(
                 np.asarray(obs, dtype=np.float32).reshape(1, -1),
                 np.asarray(next_obs, dtype=np.float32).reshape(1, -1),
                 action.reshape(1, -1),
@@ -151,7 +169,7 @@ def prefill_replay_buffer_with_milp(model, env, config: dict, max_windows=None,
 
     if verbose:
         print(f"[warm-start] MILP prefill: {n_added} transitions / {n_win} fenêtres "
-              f"(replay_buffer size = {model.replay_buffer.size()})")
+              f"(replay_buffer size = {buf.size()})")
     return n_added
 
 
@@ -184,7 +202,9 @@ def collect_milp_demos(env, config: dict, window_days: int = 1, max_windows=None
         load_w = np.array([env.load.get_load(idx + k) for k in range(w)], dtype=np.float64)
         pimp_w = np.asarray(env.price_signal.import_prices[idx:idx + w], dtype=np.float64)
         pexp_w = np.asarray(env.price_signal.export_prices[idx:idx + w], dtype=np.float64)
-        Pb = solve_milp_window(pv_w, load_w, pimp_w, pexp_w, float(env.battery.soc), config)
+        ts_w = np.asarray(env.pv.timestamps)[idx:idx + w]
+        Pb = solve_milp_window(pv_w, load_w, pimp_w, pexp_w, float(env.battery.soc), config,
+                               timestamps=ts_w)
         for k in range(w):
             action = _pb_to_action(float(Pb[k]), max_charge, max_discharge)
             obs_list.append(np.asarray(obs, dtype=np.float32))
@@ -222,7 +242,9 @@ def check_reproduction(config_path: str, max_windows: int = 5) -> float:
         load_w = np.array([train_env.load.get_load(idx + k) for k in range(w)], dtype=np.float64)
         pimp_w = np.asarray(train_env.price_signal.import_prices[idx:idx + w], dtype=np.float64)
         pexp_w = np.asarray(train_env.price_signal.export_prices[idx:idx + w], dtype=np.float64)
-        Pb = solve_milp_window(pv_w, load_w, pimp_w, pexp_w, float(train_env.battery.soc), cfg)
+        ts_w = np.asarray(train_env.pv.timestamps)[idx:idx + w]
+        Pb = solve_milp_window(pv_w, load_w, pimp_w, pexp_w, float(train_env.battery.soc), cfg,
+                               timestamps=ts_w)
         for k in range(w):
             pb = float(Pb[k])
             action = _pb_to_action(pb, max_charge, max_discharge)
@@ -271,7 +293,9 @@ def run_receding_horizon_milp(env, config: dict, horizon_steps=None,
         load_w = np.array([env.load.get_load(idx + k) for k in range(h)], dtype=np.float64)
         pimp_w = np.asarray(env.price_signal.import_prices[idx:idx + h], dtype=np.float64)
         pexp_w = np.asarray(env.price_signal.export_prices[idx:idx + h], dtype=np.float64)
-        Pb = solve_milp_window(pv_w, load_w, pimp_w, pexp_w, float(env.battery.soc), config)
+        ts_w = np.asarray(env.pv.timestamps)[idx:idx + h]
+        Pb = solve_milp_window(pv_w, load_w, pimp_w, pexp_w, float(env.battery.soc), config,
+                               timestamps=ts_w)
         n_solve += 1
         for k in range(min(K, total - idx)):
             action = _pb_to_action(float(Pb[k]), max_charge, max_discharge)

@@ -47,6 +47,22 @@ PARAM_MAP = {
     "bc_pretrain_epochs": "training.bc_pretrain_epochs",
     "bc_pretrain_lr":     "training.bc_pretrain_lr",
     "milp_window_days":   "training.milp_window_days",
+    # PBRS — valeur prix-aware du stock / reward shaping (exp19+) :
+    "store_value":    "reward.store_value",
+    "sigma_store":    "reward.sigma_store",
+    # Coût d'opportunité one-sided sur l'export de stock (exp19b+) :
+    "sigma_export_stock": "reward.sigma_export_stock",
+    # WS-1c — ancre MILP persistante / anti-washout (exp18+) :
+    "bc_anchor_demo_buffer":  "training.bc_anchor_demo_buffer",
+    "bc_anchor_demo_frac":    "training.bc_anchor_demo_frac",
+    "bc_anchor_loss":         "training.bc_anchor_loss",
+    "bc_anchor_lambda":       "training.bc_anchor_lambda",
+    "bc_anchor_lambda_final": "training.bc_anchor_lambda_final",
+    "bc_anchor_loss_batch":   "training.bc_anchor_loss_batch",
+    # AWAC — terme BC pondéré par l'avantage critique (exp20+) :
+    "bc_anchor_awac":         "training.bc_anchor_awac",
+    "bc_anchor_awac_beta":    "training.bc_anchor_awac_beta",
+    "bc_anchor_awac_wmax":    "training.bc_anchor_awac_wmax",
 }
 
 ROOT = Path(__file__).resolve().parents[2]

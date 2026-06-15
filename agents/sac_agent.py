@@ -104,7 +104,39 @@ def train_sac(env, config: dict, eval_env=None, output_dir=None):
     if policy_kwargs:
         sac_kwargs["policy_kwargs"] = policy_kwargs
 
-    model = SAC("MlpPolicy", train_env, **sac_kwargs)
+    # WS-1c — ancre MILP persistante (anti-washout) : maintient le signal « imite le MILP »
+    # pendant tout learn() (buffer démo dédié et/ou terme BC dans la loss acteur), au lieu de
+    # ne l'injecter qu'à l'init (bc_pretrain) ou dilué une fois (warm_start). Combinable avec eux.
+    # Comme le warm_start/bc_pretrain, exige des obs BRUTES (norm_obs=norm_reward=False).
+    bc_anchor_demo_buffer = bool(t_cfg.get("bc_anchor_demo_buffer", False))
+    bc_anchor_loss        = bool(t_cfg.get("bc_anchor_loss", False))
+    anchor_requested = bc_anchor_demo_buffer or bc_anchor_loss
+    anchor_active = anchor_requested and not (norm_obs or norm_reward)
+    if anchor_requested and not anchor_active:
+        print("[bc-anchor] SKIP : bc_anchor_* exige norm_obs=norm_reward=False (obs démo brutes).")
+
+    # AWAC (washoutBC.md pt 3) : pondère le terme BC par l'avantage critique. N'a d'effet que si le
+    # terme BC est actif (bc_anchor_loss=True) — sinon il n'y a pas de paires démo à pondérer.
+    bc_anchor_awac = bool(t_cfg.get("bc_anchor_awac", False))
+    if bc_anchor_awac and not bc_anchor_loss:
+        print("[bc-anchor] AWAC ignoré : bc_anchor_awac exige bc_anchor_loss=True (terme BC actif).")
+        bc_anchor_awac = False
+
+    if anchor_active:
+        from agents.bc_sac import BCSAC
+        model = BCSAC(
+            "MlpPolicy", train_env,
+            demo_frac=float(t_cfg.get("bc_anchor_demo_frac", 0.25)) if bc_anchor_demo_buffer else 0.0,
+            bc_lambda=float(t_cfg.get("bc_anchor_lambda", 1.0)) if bc_anchor_loss else 0.0,
+            bc_lambda_final=t_cfg.get("bc_anchor_lambda_final") if bc_anchor_loss else None,
+            bc_loss_batch=t_cfg.get("bc_anchor_loss_batch"),
+            bc_awac=bc_anchor_awac,
+            bc_awac_beta=float(t_cfg.get("bc_anchor_awac_beta", 1.0)),
+            bc_awac_wmax=float(t_cfg.get("bc_anchor_awac_wmax", 20.0)),
+            **sac_kwargs,
+        )
+    else:
+        model = SAC("MlpPolicy", train_env, **sac_kwargs)
 
     # Fenêtre du MILP enseignant (jours) — partagée par le warm-start et le BC. >1 = arbitrage
     # multi-jours (charger la nuit pour le lendemain), invisible avec une fenêtre 1-jour.
@@ -137,6 +169,45 @@ def train_sac(env, config: dict, eval_env=None, output_dir=None):
                 batch_size=int(t_cfg.get("bc_pretrain_batch", t_cfg["batch_size"])),
                 window_days=milp_window_days,
             )
+
+    # Remplissage de l'état démo de l'ancre (après l'init bc_pretrain, avant learn). Le buffer
+    # démo et le terme BC réutilisent les mêmes démos MILP : si le buffer est rempli, on en dérive
+    # les paires (obs, action) du terme BC pour éviter un 2e solve MILP.
+    if anchor_active:
+        import torch as th
+        demo_buffer = None
+        if bc_anchor_demo_buffer:
+            from stable_baselines3.common.buffers import ReplayBuffer
+            from baselines.milp_dispatch import prefill_replay_buffer_with_milp
+            demo_buffer = ReplayBuffer(
+                buffer_size=int(env.max_steps) + 1,
+                observation_space=model.observation_space,
+                action_space=model.action_space,
+                device=model.device,
+                n_envs=1,
+                handle_timeout_termination=False,
+            )
+            prefill_replay_buffer_with_milp(model, env, config, buffer=demo_buffer,
+                                            window_days=milp_window_days)
+            model.demo_buffer = demo_buffer
+        if bc_anchor_loss:
+            if demo_buffer is not None:
+                size = demo_buffer.size()
+                obs = np.asarray(demo_buffer.observations[:size, 0])
+                act = np.asarray(demo_buffer.actions[:size, 0])
+            else:
+                from baselines.milp_dispatch import collect_milp_demos
+                obs, act = collect_milp_demos(env, config, window_days=milp_window_days)
+            obs_t = th.as_tensor(obs, device=model.device).float()
+            act_t = th.as_tensor(act, device=model.device).float().clamp(-1.0 + 1e-3, 1.0 - 1e-3)
+            model.demo_obs = obs_t
+            model.demo_atanh_act = th.atanh(act_t)
+            lam_msg = f"{model.bc_lambda}" + (f"→{model.bc_lambda_final}"
+                                              if model.bc_lambda_final is not None else " (constant)")
+            awac_msg = (f", AWAC β={model.bc_awac_beta} wmax={model.bc_awac_wmax}"
+                        if model.bc_awac else "")
+            print(f"[bc-anchor] terme BC permanent sur {obs_t.shape[0]} paires (obs, action) MILP, "
+                  f"λ={lam_msg}{awac_msg}")
 
     callbacks, reward_logger = build_callback(eval_env, t_cfg, output_dir, t_cfg["total_timesteps"])
     model.learn(total_timesteps=t_cfg["total_timesteps"], callback=callbacks)
