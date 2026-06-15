@@ -43,10 +43,10 @@ import matplotlib.pyplot as plt  # noqa: E402
 from baselines.milp_solver import run_milp  # noqa: E402
 from monitoring.plot_monitoring_milp import plot_monitoring_milp  # noqa: E402
 from monitoring.plot_power import plot_power  # noqa: E402
-from monitoring.plot_validation_milp import plot_validation_milp  # noqa: E402
 from monitoring.run_optimization_example import (  # noqa: E402
     _build_deployment_env,
     _build_split_env,
+    compute_score_steps,
 )
 
 
@@ -96,6 +96,7 @@ def run(
     split: str = "full",
     n_steps: int | None = None,  # noqa: ARG001 — deprecated, kept for backward compat
     offset: int = 0,  # noqa: ARG001 — deprecated, kept for backward compat
+    score_days: int | None = None,
     show: bool = True,
 ):
     """End-to-end MILP example: solve + env-replay + dump + plot.
@@ -120,6 +121,10 @@ def run(
         n_steps: Deprecated no-op. The MILP now solves the full trajectory and
             both plots cover it entirely.
         offset: Deprecated no-op (the visualisation window has been removed).
+        score_days: Évaluation N-jours / scoring sur N−1. Le MILP résout TOUJOURS
+            l'horizon complet (sinon il re-dumperait au pas N−1), mais le coût
+            env-replay rapporté ne couvre que les ``score_days`` premiers jours
+            (cf. ``compute_score_steps``). ``None`` score toute la fenêtre.
         show: Open the matplotlib windows.
 
     Returns:
@@ -201,13 +206,27 @@ def run(
     print(f"[3/4] Wrote env-replay CSV   → {out_path}")
     print(f"       Wrote MILP plan  CSV → {plan_path}")
 
+    buy = env.price_signal.import_prices
+    sell = env.price_signal.export_prices
+    full_replay_cost = env.monitoring_table.get_total_cost(buy_price=buy, sell_price=sell)
+    score_steps = compute_score_steps(cfg, n_plan, score_days)
+    # Coût headline : scoré sur N−1 jours si --score-days, sinon pleine fenêtre.
     replay_cost = env.monitoring_table.get_total_cost(
-        buy_price=env.price_signal.import_prices,
-        sell_price=env.price_signal.export_prices,
+        buy_price=buy, sell_price=sell, n_steps=score_steps,
     )
-    print(f"       env-replay cost = {replay_cost:.4f} €  "
-          f"(MILP grid net cost = {metrics['net_cost']:.4f} €, "
-          f"gap = {replay_cost - metrics['net_cost']:+.4f} €)")
+    if score_steps is not None and score_steps < n_plan:
+        win_start = monitoring_df.index[0]
+        win_end = monitoring_df.index[score_steps - 1]
+        print(f"       env-replay cost scoré (jours 1..{score_days}, {score_steps} pas, "
+              f"{win_start.date()} → {win_end.date()}) = {replay_cost:.4f} €")
+        print(f"       env-replay cost pleine fenêtre ({n_plan} pas) = "
+              f"{full_replay_cost:.4f} €  "
+              f"(MILP grid net cost = {metrics['net_cost']:.4f} €, "
+              f"gap = {full_replay_cost - metrics['net_cost']:+.4f} €)")
+    else:
+        print(f"       env-replay cost = {replay_cost:.4f} €  "
+              f"(MILP grid net cost = {metrics['net_cost']:.4f} €, "
+              f"gap = {replay_cost - metrics['net_cost']:+.4f} €)")
 
     print(f"[4/4] Opening interactive plots ({n_plan} steps shown — "
           f"{monitoring_df.index[0]} → {monitoring_df.index[-1]} — "
@@ -215,7 +234,7 @@ def run(
     plot_power(
         monitoring_df,
         delta_t_minutes=env.delta_t_min,
-        cost=replay_cost,
+        cost=full_replay_cost,  # le plot trace la fenêtre complète → annoté au coût complet
         show=False,
     )
     plot_monitoring_milp(
@@ -224,12 +243,6 @@ def run(
         delta_t_minutes=env.delta_t_min,
         soc_safe_min=env.soc_safe_min,
         soc_safe_max=env.soc_safe_max,
-        show=False,
-    )
-    plot_validation_milp(
-        monitoring_df,
-        milp_plan_df,
-        delta_t_minutes=env.delta_t_min,
         show=False,
     )
     if show:
@@ -261,6 +274,12 @@ def main():
                    help="CSV path for the env-replayed monitoring table")
     p.add_argument("--plan-out", default="monitoring/runs/milp_plan.csv",
                    help="CSV path for the MILP setpoint table")
+    p.add_argument("--score-days", type=int, default=None,
+                   help="Évaluation N-jours / scoring sur N−1 : le MILP résout "
+                        "l'horizon complet mais le coût rapporté ne couvre que les "
+                        "N premiers jours (ex. --score-days 1 pour 2 jours). Exclut "
+                        "le dump de batterie de fin d'horizon. Défaut : toute la "
+                        "fenêtre.")
     p.add_argument("--no-show", action="store_true",
                    help="Skip plt.show() — useful in CI or tests")
     args = p.parse_args()
@@ -273,6 +292,7 @@ def main():
         measures_csv=args.measures,
         load_csv=args.load_csv,
         split=args.split,
+        score_days=args.score_days,
         show=not args.no_show,
     )
 

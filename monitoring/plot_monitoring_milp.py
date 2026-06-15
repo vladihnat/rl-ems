@@ -34,6 +34,7 @@ _C_GRID_IMP   = "#7f8c8d"
 _C_GRID_EXP   = "#34495e"
 _C_SOC        = "#16a085"
 _C_PHANTOM    = "#9b59b6"   # phantom power (slack Duchaud-JL) — stacked above grid import
+_C_PRICE      = "#e67e22"   # import/export price overlay (twin axis on the Pg panel)
 
 
 def _extend_for_step_post(t: np.ndarray, y: np.ndarray, delta_t: pd.Timedelta):
@@ -100,6 +101,11 @@ def plot_monitoring_milp(
     # Phantom power (slack à la Duchaud-JL). Optional column; NaN → 0.
     Pph = (np.nan_to_num(df["Pph"].to_numpy(dtype=float), nan=0.0)
            if "Pph" in df.columns else np.zeros_like(Pg))
+    # Import/export prices for the Pg overlay. Optional columns; all-NaN → no overlay.
+    price_imp = (df["price_imp"].to_numpy(dtype=float)
+                 if "price_imp" in df.columns else np.full(len(df), np.nan))
+    price_exp = (df["price_exp"].to_numpy(dtype=float)
+                 if "price_exp" in df.columns else np.full(len(df), np.nan))
 
     delta_t = pd.Timedelta(minutes=delta_t_minutes)
 
@@ -168,14 +174,30 @@ def plot_monitoring_milp(
                color=_C_MILP_PLAN, linewidth=1.5, label="Pg MILP setpoint")
     ax_pg.spines["bottom"].set_position("zero")
     ax_pg.spines["top"].set_visible(False)
-    ax_pg.spines["right"].set_visible(False)
     ax_pg.set_ylabel("Pg (kW)")
     ax_pg.grid(True, axis="y", alpha=0.3)
-    ax_pg.legend(loc="upper right", fontsize=9, ncol=2)
     # Include the phantom-topped import so the violet layer is never clipped.
     pg_amp = float(np.nanmax(np.concatenate(
         [np.abs(Pg), np.abs(Pg_p), Pg_pos_ext + Pph_ext]))) or 1.0
     ax_pg.set_ylim(-1.15 * pg_amp, 1.15 * pg_amp)
+
+    # Import/export price overlay on a twin axis (€/kWh). Invisible when the
+    # optional price columns are absent — the legend then carries power only.
+    ax_pg_price = ax_pg.twinx()
+    if not np.all(np.isnan(price_imp)):
+        ax_pg_price.plot(t, price_imp, color=_C_PRICE, linewidth=1.0,
+                         alpha=0.9, label="price import")
+    if not np.all(np.isnan(price_exp)):
+        ax_pg_price.plot(t, price_exp, color=_C_PRICE, linewidth=1.0,
+                         linestyle="--", alpha=0.9, label="price export")
+    ax_pg_price.set_ylabel("price (€/kWh)", color=_C_PRICE)
+    ax_pg_price.tick_params(axis="y", colors=_C_PRICE)
+    ax_pg_price.spines["top"].set_visible(False)
+
+    lines1, labels1 = ax_pg.get_legend_handles_labels()
+    lines2, labels2 = ax_pg_price.get_legend_handles_labels()
+    ax_pg.legend(lines1 + lines2, labels1 + labels2,
+                 loc="upper right", fontsize=9, ncol=2)
 
     # -------- Panel 4: SoC (continuous, not stairs) -----------------------
     # MATLAB plot_splitted.m line 35-39 uses plot() not stairs() for SoC
@@ -233,7 +255,7 @@ def plot_monitoring_milp(
     fig.autofmt_xdate(rotation=0, ha="center")
     # subplots_adjust (not tight_layout): the Pb / Pg cross-axes don't play
     # well with tight_layout (same caveat as plot_monitoring.py:148).
-    fig.subplots_adjust(top=0.93, bottom=0.08, left=0.08, right=0.97, hspace=0.22)
+    fig.subplots_adjust(top=0.93, bottom=0.08, left=0.08, right=0.92, hspace=0.22)
 
     if show:
         plt.show()

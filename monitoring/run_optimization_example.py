@@ -154,6 +154,26 @@ def _build_split_env(config_path: str, split: str):
     return env, cfg
 
 
+def compute_score_steps(cfg: dict, total_steps: int, score_days: int | None) -> int | None:
+    """Nombre de pas de tête à scorer pour l'évaluation N-jours / scoring sur N−1.
+
+    On simule/optimise la fenêtre complète (``total_steps``) mais on n'évalue le
+    coût que sur les ``score_days`` premiers jours. Le(s) dernier(s) jour(s)
+    servent de tampon « lendemain » : ni le RL ni le MILP n'y adoptent un
+    comportement de fin d'horizon (dump de batterie), donc la zone scorée reste
+    en régime permanent (cf. plan exp19).
+
+    Returns:
+        Le nombre de pas correspondant aux ``score_days`` premiers jours, borné à
+        ``total_steps``. ``None`` (option ``--score-days`` absente) → on score
+        toute la fenêtre (comportement historique).
+    """
+    if score_days is None:
+        return None
+    steps_per_day = round(24 * 60 / cfg["time"]["delta_t_min"])
+    return min(total_steps, int(score_days) * steps_per_day)
+
+
 def _build_forecast_df(forecast_csv: Path | None, env) -> pd.DataFrame:
     """Build a forecast DataFrame aligned to the env's timestamps.
 
@@ -189,6 +209,36 @@ def _build_forecast_df(forecast_csv: Path | None, env) -> pd.DataFrame:
     )
 
 
+def _to_soc0_csv(monitoring_df: pd.DataFrame, init_soc: float,
+                 delta_t_minutes: float) -> pd.DataFrame:
+    """Réécrit la table en convention SoC(0)->SoC(n) pour le CSV.
+
+    La table de monitoring ne stocke que le SoC d'APRÈS chaque pas
+    (SoC(1)..SoC(n)), daté au DÉBUT de l'intervalle. Pour le CSV — comme pour le
+    plot — on veut la trajectoire complète SoC(0)..SoC(n) :
+
+      * colonne ``SoC`` réalignée sur le DÉBUT d'intervalle : ligne k porte
+        SoC(k) (SoC(0)=init_soc, puis SoC(1)..SoC(n-1)). C'est exactement la
+        convention du CSV MILP, qui démarre déjà à SoC(0)=50%.
+      * une ligne terminale (t_n = dernier timestamp + Δt) porte l'état final
+        SoC(n) ; ses autres colonnes restent vides (aucune décision après le
+        dernier pas).
+
+    Les colonnes de puissance/prix/reward ne sont PAS décalées : elles restent
+    datées au début de leur intervalle.
+    """
+    df = monitoring_df.copy()
+    soc_post = df["SoC"].to_numpy(dtype=float)            # SoC(1)..SoC(n)
+    df["SoC"] = np.concatenate([[init_soc * 100.0], soc_post[:-1]])  # SoC(0)..SoC(n-1)
+
+    delta_t = pd.Timedelta(minutes=delta_t_minutes)
+    term = pd.DataFrame(
+        {"SoC": [soc_post[-1]]},                          # SoC(n)
+        index=pd.DatetimeIndex([df.index[-1] + delta_t], name=df.index.name),
+    )
+    return pd.concat([df, term])
+
+
 def run(
     config_path: str,
     model_path: str,
@@ -198,6 +248,7 @@ def run(
     load_csv: str | None = None,
     split: str = "full",
     n_steps: int | None = None,  # noqa: ARG001 — deprecated, kept for backward compat
+    score_days: int | None = None,
     deterministic: bool = True,
     show: bool = True,
     vec_normalize: str | None = None,
@@ -222,6 +273,10 @@ def run(
             override args.
         n_steps: Deprecated no-op. The rollout now spans the full deployment
             data; the visualisation window has been removed.
+        score_days: Évaluation N-jours / scoring sur N−1. On rejoue toujours la
+            fenêtre complète, mais le coût rapporté ne couvre que les
+            ``score_days`` premiers jours (cf. ``compute_score_steps``). ``None``
+            score toute la fenêtre (historique).
         deterministic: Pass-through to model.predict().
         show: Open the matplotlib windows.
         vec_normalize: Observation-normalisation stats for norm_obs models.
@@ -265,6 +320,10 @@ def run(
     print(f"[2/4] Rolling out {rollout_steps} decision steps (Δt = {env.delta_t_min} min)")
 
     obs, _ = env.reset()
+    # SoC(0) : état initial réel APRÈS reset (= init_soc, ou tirage aléatoire si
+    # random_soc=true). La table de monitoring ne stocke que les SoC post-pas
+    # (SoC(1)..SoC(n)) ; on le passe au plot pour reconstituer SoC(0)->SoC(n).
+    soc0 = float(env.battery.soc)
     if vec_norm is not None:
         obs = vec_norm.normalize_obs(obs)
     for _ in range(rollout_steps):
@@ -279,14 +338,26 @@ def run(
 
     out_path = Path(out_csv)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    monitoring_df.to_csv(out_path)
+    # CSV en convention SoC(0)->SoC(n) (cf. _to_soc0_csv), alignée sur le CSV MILP.
+    _to_soc0_csv(monitoring_df, soc0, env.delta_t_min).to_csv(out_path)
     print(f"[3/4] Monitoring table written to {out_path}")
 
+    buy = env.price_signal.import_prices
+    sell = env.price_signal.export_prices
+    full_cost = env.monitoring_table.get_total_cost(buy_price=buy, sell_price=sell)
+    score_steps = compute_score_steps(cfg, rollout_steps, score_days)
+    # Coût headline : scoré sur N−1 jours si --score-days, sinon pleine fenêtre.
     total_cost = env.monitoring_table.get_total_cost(
-        buy_price=env.price_signal.import_prices,
-        sell_price=env.price_signal.export_prices,
+        buy_price=buy, sell_price=sell, n_steps=score_steps,
     )
-    print(f"       Total optimization cost = {total_cost:.4f} €")
+    if score_steps is not None and score_steps < rollout_steps:
+        win_start = monitoring_df.index[0]
+        win_end = monitoring_df.index[score_steps - 1]
+        print(f"       Coût scoré (jours 1..{score_days}, {score_steps} pas, "
+              f"{win_start.date()} → {win_end.date()}) = {total_cost:.4f} €")
+        print(f"       Coût pleine fenêtre ({rollout_steps} pas) = {full_cost:.4f} €")
+    else:
+        print(f"       Total optimization cost = {total_cost:.4f} €")
 
     forecast_df = _build_forecast_df(
         Path(forecast_csv) if forecast_csv else None, env,
@@ -296,13 +367,14 @@ def run(
     plot_power(
         monitoring_df,
         delta_t_minutes=env.delta_t_min,
-        cost=total_cost,
+        cost=full_cost,  # le plot trace la fenêtre complète → on l'annote au coût complet
         show=False,
     )
     plot_monitoring(
         monitoring_df,
         forecast_df=forecast_df,
         delta_t_minutes=env.delta_t_min,
+        init_soc=soc0,
         show=False,
     )
     if show:
@@ -332,10 +404,19 @@ def main():
                         "evaluated). With test/train the CSV args are ignored.")
     p.add_argument("--out", default="monitoring/runs/monitoring_table.csv",
                    help="Destination CSV for the monitoring table")
+    p.add_argument("--score-days", type=int, default=None,
+                   help="Évaluation N-jours / scoring sur N−1 : rejoue la fenêtre "
+                        "complète mais ne calcule le coût que sur les N premiers "
+                        "jours (ex. --score-days 1 pour une fenêtre 2 jours). "
+                        "Exclut le dump de batterie de fin d'horizon. Défaut : "
+                        "score toute la fenêtre.")
     p.add_argument("--vec-normalize", default=None,
                    help="Obs-normalisation stats for norm_obs models. Default: "
                         "auto-detect vec_normalize.pkl next to the model. "
                         "'none' forces raw obs; or pass an explicit .pkl path.")
+    p.add_argument("--no-show", action="store_true",
+                   help="Skip plt.show() — useful for batch runs over several "
+                        "simulation cases (CSV is still written).")
     args = p.parse_args()
 
     run(
@@ -346,7 +427,8 @@ def main():
         load_csv=args.load_csv,
         split=args.split,
         out_csv=args.out,
-        show=True,
+        score_days=args.score_days,
+        show=not args.no_show,
         vec_normalize=args.vec_normalize,
     )
 
