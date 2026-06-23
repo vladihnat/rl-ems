@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # Référence MILP pour le sweep de tuning de l'ancre exp18_anchortune. Le MILP ne dépend que du
 # config (batterie 100 kW, prix) — identique pour tous les bras ; on prend celui du run RL retenu.
 # ⚠ À AJUSTER après le sweep : mettre RUN = meilleur run (gap_best) de exp18_anchortune.
-RUN="run_001"   # placeholder — remplacer par le meilleur run RL retenu.
+RUN="run_005"   # placeholder — remplacer par le meilleur run RL retenu.
 CONFIG="configs/sweeps/exp18_anchortune/${RUN}.yaml"
 
 cd "$ROOT"

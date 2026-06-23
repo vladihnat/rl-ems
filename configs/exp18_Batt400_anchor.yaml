@@ -57,6 +57,12 @@ reward:
   soc_safe_min: 0.2
   soc_safe_max: 0.9
   spread_penalty: true
+  # PBRS valeur-du-stock (exp19+) — JAMAIS combiné à l'ancre jusqu'ici. Contre le dump précoce
+  # (biais d'actualisation), invariant sur l'optimum (télescope en −Φ(s₀)) ⇒ ne casse pas la
+  # comparaison MILP. Axe de sweep sigma_store (0.0 = OFF) pour mesurer l'apport ancre+PBRS.
+  store_value:  true
+  sigma_store:  1.0
+  sigma_export_stock: 0.0
 
 training:
   algorithm: SAC

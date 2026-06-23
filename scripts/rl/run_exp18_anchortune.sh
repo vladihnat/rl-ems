@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # Sweep de tuning de l'ancre exp18 (demo_frac × λ sur le combo gagnant buffer+loss ON).
 # ⚠ À AJUSTER après le sweep : mettre RUN = meilleur run (gap_best) de exp18_anchortune.
-RUN="run_001"   # placeholder (demo_frac=0.25, λ=1.0, seed 40) — remplacer par le meilleur run.
+RUN="run_005"   # placeholder (demo_frac=0.25, λ=1.0, seed 40) — remplacer par le meilleur run.
 CONFIG="configs/sweeps/exp18_anchortune/${RUN}.yaml"
 MODEL="results/exp18_anchortune/${RUN}/best_model.zip"
 

@@ -5,8 +5,9 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # Best run du sweep exp19b (PBRS + coût d'opportunité d'export de stock). À AJUSTER après
 # aggregate_results.py : pointer le run au plus petit sigma_export_stock qui ferme le gap
 # ete_basse sans dégrader haute. Placeholder = run_001 (sigma_export_stock=0.0 = contrôle exp19).
-CONFIG="configs/sweeps/exp19b_exportstock/run_001.yaml"
-MODEL="results/exp19b_exportstock/run_001/best_model.zip"
+RUN="run_000"   #placeholder (pour l'instant 0 et 5, manquent moitie des results)
+CONFIG="configs/sweeps/exp19b_exportstock/${RUN}.yaml"
+MODEL="results/exp19b_exportstock/${RUN}/best_model.zip"
 
 cd "$ROOT"
 

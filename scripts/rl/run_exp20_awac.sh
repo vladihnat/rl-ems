@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # Sweep AWAC exp20 (terme BC pondéré par l'avantage critique, β = axe de sweep ; buffer+loss ON).
 # ⚠ À AJUSTER après le sweep : mettre RUN = meilleur run (gap_best) de exp20_awac.
-RUN="run_001"   # placeholder (β=1.0, seed 40) — remplacer par le meilleur run.
+RUN="run_002"   # placeholder (β=1.0, seed 40) — remplacer par le meilleur run.
 CONFIG="configs/sweeps/exp20_awac/${RUN}.yaml"
 MODEL="results/exp20_awac/${RUN}/best_model.zip"
 

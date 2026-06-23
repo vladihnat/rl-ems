@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # Référence MILP pour le sweep AWAC exp20_awac. Le MILP ne dépend que du config (batterie 100 kW,
 # prix) — identique pour tous les bras ; on prend celui du run RL retenu pour une comparaison cohérente.
 # ⚠ À AJUSTER après le sweep : mettre RUN = meilleur run (gap_best) de exp20_awac.
-RUN="run_001"   # placeholder — remplacer par le meilleur run RL retenu.
+RUN="run_002"   # placeholder — remplacer par le meilleur run RL retenu.
 CONFIG="configs/sweeps/exp20_awac/${RUN}.yaml"
 
 cd "$ROOT"

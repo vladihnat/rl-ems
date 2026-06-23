@@ -5,7 +5,8 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # Référence MILP du sweep exp19b. Le terme r_export_stock est PURE récompense RL (zéro sur
 # l'optimum) → le MILP est identique à exp19 ; on prend le config du run RL retenu pour une
 # comparaison cohérente (batterie 100 kW, même scénario). À AJUSTER comme le script RL.
-CONFIG="configs/sweeps/exp19b_exportstock/run_001.yaml"
+RUN="run_000"   # placeholder — remplacer par le run RL retenu.
+CONFIG="configs/sweeps/exp19_store/${RUN}.yaml"
 
 cd "$ROOT"
 
