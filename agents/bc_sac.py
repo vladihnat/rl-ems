@@ -74,6 +74,23 @@ class BCSAC(SAC):
         frac = self._current_progress_remaining
         return float(self.bc_lambda_final) + (self.bc_lambda - float(self.bc_lambda_final)) * frac
 
+    def _norm_demo_obs(self, s: th.Tensor) -> th.Tensor:
+        """Normalise des obs démo BRUTES avec les stats VecNormalize VIVANTES (cas norm_obs=True).
+
+        Les démos MILP sont collectées en obs brutes (cf. ``collect_milp_demos``) ; sous norm_obs la
+        policy attend des obs normalisées. On réplique ``VecNormalize.normalize_obs`` en torch à
+        partir des ``obs_rms`` COURANTS (mobile : relu à chaque step ⇒ même espace que celui où vit
+        l'acteur). Le buffer démo (approche 1) est déjà normalisé au sampling via ``sample(env=...)``
+        ; ce helper couvre le terme BC (approche 2) + les critiques AWAC. Identité si pas de
+        VecNormalize ou norm_obs=False (rétro-compat stricte des runs en obs brutes).
+        """
+        venv = self._vec_normalize_env
+        if venv is None or not getattr(venv, "norm_obs", False):
+            return s
+        mean = th.as_tensor(venv.obs_rms.mean, device=s.device, dtype=s.dtype)
+        var = th.as_tensor(venv.obs_rms.var, device=s.device, dtype=s.dtype)
+        return th.clamp((s - mean) / th.sqrt(var + venv.epsilon), -venv.clip_obs, venv.clip_obs)
+
     def _sample_mixed(self, batch_size: int) -> ReplayBufferSamples:
         """Minibatch = ``demo_frac`` du buffer démo + le reste du buffer de replay normal."""
         if self.demo_buffer is None or self.demo_frac <= 0.0:
@@ -180,7 +197,9 @@ class BCSAC(SAC):
             if self.demo_obs is not None and lam > 0.0:
                 bs = int(self.bc_loss_batch) if self.bc_loss_batch else batch_size
                 idx = th.randint(0, self.demo_obs.shape[0], (bs,), device=self.device)
-                s_demo = self.demo_obs[idx]
+                # Obs démo brutes → normalisées avec les stats VecNormalize vivantes (norm_obs=True),
+                # sinon identité. Couvre l'acteur ET les critiques AWAC (q_demo/q_pi ci-dessous).
+                s_demo = self._norm_demo_obs(self.demo_obs[idx])
                 target = self.demo_atanh_act[idx]
                 mean_actions, _, _ = self.actor.get_action_dist_params(s_demo)
                 per_sample = ((mean_actions - target) ** 2).mean(dim=1)  # MSE par échantillon (bs,)

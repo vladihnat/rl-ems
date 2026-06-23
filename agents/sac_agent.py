@@ -9,7 +9,8 @@ from evaluation.metrics import compute_metrics, metrics_by_season, season_labels
 
 
 def _bc_pretrain_actor(model, env, config: dict, epochs: int, lr: float,
-                       batch_size: int, window_days: int, verbose: bool = True) -> int:
+                       batch_size: int, window_days: int, vec_env=None,
+                       verbose: bool = True) -> int:
     """Pré-entraîne l'acteur SAC par imitation (BC) du dispatch MILP, AVANT le RL.
 
     Régression supervisée dans l'espace **pré-tanh** : ``μ(obs) ≈ atanh(a_MILP)``. On NE régresse
@@ -30,6 +31,15 @@ def _bc_pretrain_actor(model, env, config: dict, epochs: int, lr: float,
         return 0
     device = model.device
     obs_t = th.as_tensor(obs, device=device)
+    # Sous norm_obs : la policy attend des obs normalisées. On amorce obs_rms avec les démos (qui
+    # couvrent toute la fenêtre train ⇒ stats représentatives, évite l'init quasi-identité), puis on
+    # normalise les obs du BC. learn() fera évoluer obs_rms à partir de ce départ représentatif.
+    if vec_env is not None and getattr(vec_env, "norm_obs", False):
+        vec_env.obs_rms.update(np.asarray(obs, dtype=np.float64))
+        mean = th.as_tensor(vec_env.obs_rms.mean, device=device, dtype=obs_t.dtype)
+        var = th.as_tensor(vec_env.obs_rms.var, device=device, dtype=obs_t.dtype)
+        obs_t = th.clamp((obs_t - mean) / th.sqrt(var + vec_env.epsilon),
+                         -vec_env.clip_obs, vec_env.clip_obs)
     # Cible pré-tanh : atanh borné (atanh(±1)=±∞). 1e-3 → atanh≈±3.8, atteignable par μ.
     act_t = th.as_tensor(act, device=device).clamp(-1.0 + 1e-3, 1.0 - 1e-3)
     target_pre = th.atanh(act_t)
@@ -111,9 +121,14 @@ def train_sac(env, config: dict, eval_env=None, output_dir=None):
     bc_anchor_demo_buffer = bool(t_cfg.get("bc_anchor_demo_buffer", False))
     bc_anchor_loss        = bool(t_cfg.get("bc_anchor_loss", False))
     anchor_requested = bc_anchor_demo_buffer or bc_anchor_loss
-    anchor_active = anchor_requested and not (norm_obs or norm_reward)
+    # norm_obs=True désormais supporté : les obs démo brutes sont normalisées avec les stats
+    # VecNormalize vivantes (buffer démo via sample(env=...), terme BC via BCSAC._norm_demo_obs,
+    # pretrain via _bc_pretrain_actor). norm_reward reste interdit : les récompenses démo stockées
+    # ne passent pas par la normalisation de retour de VecNormalize ⇒ cibles critiques incohérentes.
+    anchor_active = anchor_requested and not norm_reward
     if anchor_requested and not anchor_active:
-        print("[bc-anchor] SKIP : bc_anchor_* exige norm_obs=norm_reward=False (obs démo brutes).")
+        print("[bc-anchor] SKIP : bc_anchor_* incompatible avec norm_reward=True "
+              "(récompenses démo non normalisées) ; norm_obs=True est supporté.")
 
     # AWAC (washoutBC.md pt 3) : pondère le terme BC par l'avantage critique. N'a d'effet que si le
     # terme BC est actif (bc_anchor_loss=True) — sinon il n'y a pas de paires démo à pondérer.
@@ -146,10 +161,12 @@ def train_sac(env, config: dict, eval_env=None, output_dir=None):
     # le comportement d'arbitrage que l'exploration ne découvre pas. Requiert des obs BRUTES
     # (norm_obs=norm_reward=False) car les transitions stockées doivent matcher l'entrée policy.
     if t_cfg.get("warm_start_milp", False):
-        if norm_obs or norm_reward:
-            print("[warm-start] SKIP : warm_start_milp exige norm_obs=norm_reward=False "
-                  "(obs du buffer ≠ entrée policy sinon).")
+        if norm_reward:
+            print("[warm-start] SKIP : warm_start_milp incompatible avec norm_reward=True "
+                  "(récompenses démo non normalisées).")
         else:
+            # norm_obs=True OK : comme SB3, le replay buffer stocke des obs BRUTES et les normalise
+            # au sampling via sample(env=self._vec_normalize_env).
             from baselines.milp_dispatch import prefill_replay_buffer_with_milp
             prefill_replay_buffer_with_milp(model, env, config,
                                             max_windows=t_cfg.get("warm_start_max_days"),
@@ -159,15 +176,17 @@ def train_sac(env, config: dict, eval_env=None, output_dir=None):
     # Mêmes obs brutes requises que le warm-start.
     bc_epochs = int(t_cfg.get("bc_pretrain_epochs", 0))
     if bc_epochs > 0:
-        if norm_obs or norm_reward:
-            print("[bc-pretrain] SKIP : bc_pretrain_epochs exige norm_obs=norm_reward=False.")
+        if norm_reward:
+            print("[bc-pretrain] SKIP : bc_pretrain_epochs incompatible avec norm_reward=True.")
         else:
+            # norm_obs=True OK : _bc_pretrain_actor amorce obs_rms avec les démos puis normalise.
             _bc_pretrain_actor(
                 model, env, config,
                 epochs=bc_epochs,
                 lr=float(t_cfg.get("bc_pretrain_lr", t_cfg["learning_rate"])),
                 batch_size=int(t_cfg.get("bc_pretrain_batch", t_cfg["batch_size"])),
                 window_days=milp_window_days,
+                vec_env=vec_env,
             )
 
     # Remplissage de l'état démo de l'ancre (après l'init bc_pretrain, avant learn). Le buffer
