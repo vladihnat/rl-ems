@@ -61,6 +61,12 @@ class MicrogridEnv(gym.Env):
 
         self._load_forecast_in_obs = config.get("observation", {}).get("load_forecast", False)
         self._price_export_fc_in_obs = config.get("observation", {}).get("price_export_forecast", False)
+        # Feature de timing (optimum-safe, pur input — ne touche ni reward ni dynamique) : « gap à
+        # pic » = de combien l'énergie vaut PLUS au meilleur moment futur de l'horizon que maintenant
+        # (cf. _get_obs). Donne explicitement le signal « dois-je attendre ? » que l'agent devait
+        # sinon extraire lui-même du vecteur forecast (et ratait → dump t0). Exige un forecast prix
+        # (has_forecast) ; inerte sous prix fixes (=0). Défaut OFF ⇒ obs des configs existantes inchangées.
+        self._timing_feat = config.get("observation", {}).get("timing_feature", False)
         self._spread_penalty = config["reward"].get("spread_penalty", False)
         self._sigma_bat = config["reward"].get("sigma_bat", 0.0)
         self._random_soc = config.get("training", {}).get("random_soc", False)
@@ -85,9 +91,10 @@ class MicrogridEnv(gym.Env):
             if (self._price_export_fc_in_obs and self.price_signal.has_forecast)
             else 0
         )
+        timing_dim = 1 if (self._timing_feat and self.price_signal.has_forecast) else 0
         obs_dim = (
             9 + self.horizon_steps + load_forecast_dim
-            + price_forecast_dim + export_forecast_dim
+            + price_forecast_dim + export_forecast_dim + timing_dim
         )
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
@@ -124,6 +131,13 @@ class MicrogridEnv(gym.Env):
             parts.append(self.price_signal.get_import_forecast(self.step_index, self.horizon_steps))
         if self._price_export_fc_in_obs and self.price_signal.has_forecast:
             parts.append(self.price_signal.get_export_forecast(self.step_index, self.horizon_steps))
+        if self._timing_feat and self.price_signal.has_forecast:
+            # Gap à pic ≥ 0 (=0 quand maintenant EST le meilleur moment de l'horizon) : meilleure
+            # valeur de déploiement future (_store_value = max forecast imp/exp) moins celle de
+            # maintenant (max prix instantanés). Pré-calcule l'argmax que l'agent ratait.
+            parts.append(np.array(
+                [self._store_value(self.step_index) - max(p_imp, p_exp)], dtype=np.float32
+            ))
 
         return np.concatenate(parts)
 
@@ -322,8 +336,15 @@ class MicrogridEnv(gym.Env):
             )
 
         self.step_index += 1
-        terminated = self.step_index >= self.max_steps
-        truncated = False
+        # Le cutoff d'horizon est une TRONCATURE temporelle (l'opération microgrid continue),
+        # pas un terminal naturel → truncated=True (terminated=False). SB3 (SAC,
+        # handle_timeout_termination=True) bootstrappe alors V(s') à la frontière : sans ça,
+        # done_effective=True ⇒ aucune valeur de continuation ⇒ myopie de fin d'épisode
+        # (l'agent cesse d'investir dans le stock les derniers jours) ET le γ·Φ(s_T) du PBRS
+        # r_store ne s'annule pas (biais terminal). Cf. plans_claude (overfit re-frame).
+        reached_horizon = self.step_index >= self.max_steps
+        terminated = False
+        truncated = reached_horizon
 
         info = {
             "Pb_effective": Pb_effective,
@@ -344,7 +365,12 @@ class MicrogridEnv(gym.Env):
             "price_export": price_exp,
         }
 
-        obs = self._get_obs() if not terminated else np.zeros(
-            self.observation_space.shape, dtype=np.float32
-        )
+        # Vraie obs finale (pas des zéros) pour que SB3 bootstrappe V(s') dessus à la
+        # troncature (DummyVecEnv la stocke comme terminal_observation). Garde-fou : sur le
+        # chemin replay où max_steps est poussé à n_steps, step_index peut atteindre n_steps
+        # → zéros (non lus : la boucle de replay break sur `done` avant de consommer l'obs).
+        if self.step_index < self.pv.n_steps:
+            obs = self._get_obs()
+        else:
+            obs = np.zeros(self.observation_space.shape, dtype=np.float32)
         return obs, reward, terminated, truncated, info
