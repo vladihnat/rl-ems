@@ -37,6 +37,13 @@ def run_milp(env, config: dict) -> dict:
     Pg = cp.Variable(T)
     P_imp = cp.Variable(T, nonneg=True)
     P_exp = cp.Variable(T, nonneg=True)
+    # Complémentarité import/export : binaire interdisant P_imp et P_exp d'être tous deux > 0
+    # au même pas (1 = import, 0 = export). SANS elle, dès que le prix d'export dépasse le prix
+    # d'import (pic CoutsProd haute saison soir : export ~0.35-0.44 vs import HP 0.2475 €/kWh),
+    # le solveur « pompe » un spread fictif en achetant ET vendant à la borne réseau au même
+    # instant : objectif non physique (énergie créée du néant) et dispatch batterie corrompu,
+    # rendant la baseline MILP battable par le RL. cf. tests/test_milp_no_money_pump.py.
+    g_grid = cp.Variable(T, boolean=True)
     Pcurt = cp.Variable(T, nonneg=True)  # curtailment PV explicite
     # Puissance fantôme (slack à la Duchaud-JL, cf. @EmsLinprog Pph) : production
     # « sortie du néant » ≥ 0, sans borne supérieure, fortement pénalisée. Permet de
@@ -56,8 +63,17 @@ def run_milp(env, config: dict) -> dict:
 
     constraints.append(Pb >= -max_charge)
     constraints.append(Pb <= max_discharge)
-    constraints.append(P_imp <= max_imp)
-    constraints.append(P_exp <= max_exp)
+    # Big-M (= bornes réseau) liées au binaire g_grid : g=1 ⇒ P_exp=0 (import ≤ max_imp) ;
+    # g=0 ⇒ P_imp=0 (export ≤ max_exp). Remplace les bornes simples pour tuer le money-pump.
+    # Non-contraignant quand price_exp ≤ price_imp (toute basse saison / heures creuses) :
+    # l'optimum LP y a déjà P_imp·P_exp=0 ⇒ résultats inchangés sur ces régimes.
+    #Decomente ligne 46 pour que cela marche et commente lignes 75 et 76
+    constraints.append(P_imp <= max_imp * g_grid)
+    constraints.append(P_exp <= max_exp * (1 - g_grid))
+
+    # Contraintes ancienne sans complementarité 
+    # constraints.append(P_imp <= max_imp)
+    # constraints.append(P_exp <= max_exp )
 
     # SoC dynamics: linearised (charge/discharge handled via single efficiency approximation)
     # For the MILP we use a simplified model:
