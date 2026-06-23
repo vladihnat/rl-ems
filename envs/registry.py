@@ -74,6 +74,67 @@ def _temporal_split3(pv_source: PVSource, split_ratio: float, val_split: float):
     return train_idx, val_idx, test_idx
 
 
+def _build_env(indices, cfg_dict, pv_full, is_train=False):
+    """Construit un MicrogridEnv tranché sur ``indices``.
+
+    Lifté de ``make_env`` (où il était imbriqué) pour être réutilisé par
+    ``make_env_overfit``. ``pv_full`` sert uniquement à l'assert d'alignement load↔pv.
+
+    random_soc ne doit randomiser le SoC initial QU'À L'ENTRAÎNEMENT. Sinon val/test
+    tirent un SoC initial non contrôlé (RNG seedé par entropie, cf.
+    base_microgrid_env.reset) ≠ init_soc fixe du MILP (milp_solver.py:init_soc) :
+    gap_best/gap_final deviennent incomparables (2 reset = 2 tirages) et la comparaison
+    RL↔MILP est inéquitable (SoC initial élevé = énergie « gratuite »). On force donc
+    random_soc=False hors entraînement.
+    """
+    if not is_train:
+        cfg_dict.setdefault("training", {})["random_soc"] = False
+    pv = PVSource(cfg_dict["pv"], cfg_dict["data"])
+    pv.set_data_slice(indices)
+
+    load = LoadModel(
+        cfg_dict["load"],
+        cfg_dict["data"],
+        n_steps=len(indices),
+        delta_t_min=cfg_dict["time"]["delta_t_min"],
+        timestamps=pv.timestamps,
+    )
+    if load.load_type != "fixed":
+        assert load.n_steps == pv_full.n_steps, (
+            f"load_csv length ({load.n_steps}) != pv_csv length "
+            f"({pv_full.n_steps}); the two must be row-aligned on Time."
+        )
+        load.set_data_slice(indices)
+
+    battery = BatteryModel(cfg_dict["battery"])
+    price_signal = PriceSignal(
+        cfg_dict["grid"], pv.timestamps, cfg_dict["time"]["delta_t_min"]
+    )
+    return MicrogridEnv(pv, load, battery, price_signal, cfg_dict)
+
+
+def make_env_overfit(config_path: str):
+    """Train + eval envs couvrant TOUTE la fenêtre CSV (sanity check « overfit »).
+
+    Pour la validation 2-jours/N-jours demandée par le superviseur : on entraîne ET on
+    évalue sur la MÊME fenêtre (aucun held-out), pour répondre à « le RL peut-il au moins
+    approcher l'optimum MILP sur des données qu'il a vues ? ». Chaque appel renvoie des
+    instances NEUVES (à appeler une fois par rôle : train / validation / test / MILP, afin
+    d'éviter toute fuite d'état entre évaluations). ``train_env`` garde ``random_soc`` du
+    config ; ``eval_env`` force ``random_soc=False`` (même SoC initial que le MILP).
+
+    Returns ``(train_env, eval_env, config_dict)``.
+    """
+    with open(config_path, "r") as f:
+        cfg = yaml.safe_load(f)
+
+    pv_full = PVSource(cfg["pv"], cfg["data"])
+    all_idx = np.arange(pv_full.n_steps)
+    train_env = _build_env(all_idx, copy.deepcopy(cfg), pv_full, is_train=True)
+    eval_env = _build_env(all_idx, copy.deepcopy(cfg), pv_full, is_train=False)
+    return train_env, eval_env, cfg
+
+
 def make_env(config_path: str, with_val: bool = False):
     """Create train (val) and test MicrogridEnv instances from a YAML config.
 
@@ -89,47 +150,15 @@ def make_env(config_path: str, with_val: bool = False):
 
     split_ratio = cfg["training"]["train_split"]
 
-    def _build_env(indices, cfg_dict, is_train=False):
-        # random_soc ne doit randomiser le SoC initial QU'À L'ENTRAÎNEMENT. Sinon val/test
-        # tirent un SoC initial non contrôlé (RNG seedé par entropie, cf.
-        # base_microgrid_env.reset) ≠ init_soc fixe du MILP (milp_solver.py:init_soc) :
-        # gap_best/gap_final deviennent incomparables (2 reset = 2 tirages) et la comparaison
-        # RL↔MILP est inéquitable (SoC initial élevé = énergie « gratuite »). On force donc
-        # random_soc=False hors entraînement.
-        if not is_train:
-            cfg_dict.setdefault("training", {})["random_soc"] = False
-        pv = PVSource(cfg_dict["pv"], cfg_dict["data"])
-        pv.set_data_slice(indices)
-
-        load = LoadModel(
-            cfg_dict["load"],
-            cfg_dict["data"],
-            n_steps=len(indices),
-            delta_t_min=cfg_dict["time"]["delta_t_min"],
-            timestamps=pv.timestamps,
-        )
-        if load.load_type != "fixed":
-            assert load.n_steps == pv_full.n_steps, (
-                f"load_csv length ({load.n_steps}) != pv_csv length "
-                f"({pv_full.n_steps}); the two must be row-aligned on Time."
-            )
-            load.set_data_slice(indices)
-
-        battery = BatteryModel(cfg_dict["battery"])
-        price_signal = PriceSignal(
-            cfg_dict["grid"], pv.timestamps, cfg_dict["time"]["delta_t_min"]
-        )
-        return MicrogridEnv(pv, load, battery, price_signal, cfg_dict)
-
     if with_val:
         val_split = cfg["training"].get("val_split", 0.0)
         train_idx, val_idx, test_idx = _temporal_split3(pv_full, split_ratio, val_split)
-        train_env = _build_env(train_idx, copy.deepcopy(cfg), is_train=True)
-        val_env = _build_env(val_idx, copy.deepcopy(cfg)) if len(val_idx) > 0 else None
-        test_env = _build_env(test_idx, copy.deepcopy(cfg))
+        train_env = _build_env(train_idx, copy.deepcopy(cfg), pv_full, is_train=True)
+        val_env = _build_env(val_idx, copy.deepcopy(cfg), pv_full) if len(val_idx) > 0 else None
+        test_env = _build_env(test_idx, copy.deepcopy(cfg), pv_full)
         return train_env, val_env, test_env, cfg
 
     train_idx, test_idx = _temporal_split(pv_full, split_ratio)
-    train_env = _build_env(train_idx, copy.deepcopy(cfg), is_train=True)
-    test_env = _build_env(test_idx, copy.deepcopy(cfg))
+    train_env = _build_env(train_idx, copy.deepcopy(cfg), pv_full, is_train=True)
+    test_env = _build_env(test_idx, copy.deepcopy(cfg), pv_full)
     return train_env, test_env, cfg
