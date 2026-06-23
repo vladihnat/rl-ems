@@ -104,6 +104,41 @@ def compute_metrics(
     }
 
 
+def boundary_soc_credit(
+    soc_end_frac: float,
+    soc_init_frac: float,
+    capacity_kwh: float,
+    eta_discharge: float,
+    store_value: float,
+) -> float:
+    """Valeur (€) de l'énergie batterie portée au BORD d'une fenêtre scorée.
+
+    Quand on score un préfixe STRICT d'un rollout (``score_days`` < horizon de plan),
+    l'énergie restée dans la batterie au bord servira AU-DELÀ de la fenêtre (éviter un
+    import futur). L'ignorer biaise la comparaison : une politique qui draine la batterie
+    avant le bord paraît moins chère (artefact pur sous prix fixes, cf. exp22 hiver_haute :
+    le RL « bat » le MILP de −61 % alors qu'ils sont à égalité sur le plein horizon). On
+    crédite donc ce stock, SYMÉTRIQUEMENT pour le RL et le MILP :
+
+        credit = (soc_end − soc_init) · capacity · eta_discharge · store_value
+        net_cost_scoré ← net_cost_scoré − credit
+
+    ``eta_discharge`` convertit le SoC stocké en énergie réellement livrable (1 kWh de SoC
+    rend ``eta_discharge`` kWh) — NÉCESSAIRE ici (≠ ``MicrogridEnv._export_opportunity_cost``
+    où le rendement se simplifie entre deux actions futures). ``store_value`` = valeur
+    marginale du stock (€/kWh ; sous prix fixes = prix d'import, cf. ``_store_value``).
+
+    NE PAS appliquer au vrai terminal du rollout : l'énergie restante n'a aucun futur ⇒
+    c'est une vraie perte (la sous-décharge terminale doit rester pénalisée).
+
+    Returns:
+        Le crédit (€) à SOUSTRAIRE du coût net scoré. >0 si l'agent porte de l'inventaire au
+        bord (soc_end > soc_init), <0 s'il l'a bradé. ``soc_init`` (commun RL/MILP) s'annule
+        dans le gap ; il garde seulement ``net_cost`` physiquement interprétable.
+    """
+    return (soc_end_frac - soc_init_frac) * capacity_kwh * eta_discharge * store_value
+
+
 def metrics_by_season(
     history: dict,
     labels: np.ndarray,
