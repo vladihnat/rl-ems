@@ -41,6 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import matplotlib.pyplot as plt  # noqa: E402
 
 from baselines.milp_solver import run_milp  # noqa: E402
+from evaluation.metrics import boundary_soc_credit  # noqa: E402
 from monitoring.plot_monitoring_milp import plot_monitoring_milp  # noqa: E402
 from monitoring.plot_power import plot_power  # noqa: E402
 from monitoring.run_optimization_example import (  # noqa: E402
@@ -98,6 +99,7 @@ def run(
     offset: int = 0,  # noqa: ARG001 — deprecated, kept for backward compat
     score_days: int | None = None,
     show: bool = True,
+    cap_horizon: bool = False,
 ):
     """End-to-end MILP example: solve + env-replay + dump + plot.
 
@@ -133,9 +135,10 @@ def run(
     """
     if split == "full":
         deployment_csv = measures_csv if measures_csv is not None else forecast_csv
-        env, cfg = _build_deployment_env(config_path, deployment_csv, load_csv)
+        env, cfg = _build_deployment_env(config_path, deployment_csv, load_csv,
+                                         cap_horizon=cap_horizon)
     else:
-        env, cfg = _build_split_env(config_path, split)
+        env, cfg = _build_split_env(config_path, split, cap_horizon=cap_horizon)
 
     print(f"[1/4] Solving MILP (T = {env.max_steps} steps, "
           f"Δt = {env.delta_t_min} min)")
@@ -215,6 +218,16 @@ def run(
         buy_price=buy, sell_price=sell, n_steps=score_steps,
     )
     if score_steps is not None and score_steps < n_plan:
+        # Crédit de SoC de bord (cf. evaluation.metrics.boundary_soc_credit / exp22) : même
+        # correction que côté RL (run_optimization_example) pour que le coût scoré MILP reste
+        # symétrique et matche le net_cost de run_experiment. SoC table en POURCENT ⇒ /100.
+        replay_cost -= boundary_soc_credit(
+            soc_end_frac=float(monitoring_df["SoC"].iloc[score_steps - 1]) / 100.0,
+            soc_init_frac=float(cfg["battery"]["init_soc"]),
+            capacity_kwh=float(cfg["battery"]["capacity_kwh"]),
+            eta_discharge=float(cfg["battery"]["efficiency_discharge"]),
+            store_value=float(env._store_value(score_steps - 1)),
+        )
         win_start = monitoring_df.index[0]
         win_end = monitoring_df.index[score_steps - 1]
         print(f"       env-replay cost scoré (jours 1..{score_days}, {score_steps} pas, "
@@ -282,6 +295,10 @@ def main():
                         "fenêtre.")
     p.add_argument("--no-show", action="store_true",
                    help="Skip plt.show() — useful in CI or tests")
+    p.add_argument("--cap-horizon", action="store_true",
+                   help="Garde le cap max_steps = n_steps - horizon (le MILP planifie "
+                        "le même horizon que l'entraînement RL). À utiliser pour le "
+                        "sanity-check overfit (MILP ≡ horizon vu par le RL).")
     args = p.parse_args()
 
     run(
@@ -294,6 +311,7 @@ def main():
         split=args.split,
         score_days=args.score_days,
         show=not args.no_show,
+        cap_horizon=args.cap_horizon,
     )
 
 

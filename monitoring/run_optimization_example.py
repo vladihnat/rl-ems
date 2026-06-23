@@ -57,6 +57,7 @@ from envs.components.battery import BatteryModel  # noqa: E402
 from envs.components.load import LoadModel  # noqa: E402
 from envs.components.price_signal import PriceSignal  # noqa: E402
 from envs.components.pv_source import PVSource  # noqa: E402
+from evaluation.metrics import boundary_soc_credit  # noqa: E402
 from monitoring.plot_monitoring import plot_monitoring  # noqa: E402
 from monitoring.plot_power import plot_power  # noqa: E402
 
@@ -83,6 +84,7 @@ def _build_deployment_env(
     config_path: str,
     deployment_csv: str | None,
     deployment_load_csv: str | None = None,
+    cap_horizon: bool = False,
 ):
     """Build a single MicrogridEnv consuming the deployment CSV end-to-end.
 
@@ -122,15 +124,19 @@ def _build_deployment_env(
         cfg["grid"], pv.timestamps, cfg["time"]["delta_t_min"]
     )
     env = MicrogridEnv(pv, load, battery, price_signal, cfg)
-    # Deployment covers the whole CSV. The training-time cap
+    # Deployment covers the whole CSV by default. The training-time cap
     # `max_steps = n_steps - horizon_steps` would crop the last horizon_h hours
     # off the rollout (e.g. 6h missing from the plots). Forecast accessors
     # already edge-pad past the end, so we can safely walk to n_steps here.
-    env.max_steps = env.pv.n_steps
+    # cap_horizon=True GARDE le cap d'entraînement : pour le sanity-check overfit,
+    # l'agent ne doit être rejoué que sur les pas de décision VUS à l'entraînement
+    # (sinon le dernier jour, jamais joué, fausse le replay — cf. plan, étape 2).
+    if not cap_horizon:
+        env.max_steps = env.pv.n_steps
     return env, cfg
 
 
-def _build_split_env(config_path: str, split: str):
+def _build_split_env(config_path: str, split: str, cap_horizon: bool = False):
     """Build the env for a registry train/test split, matching ``make_env`` exactly.
 
     Unlike ``_build_deployment_env`` (which exposes the full CSV), this reproduces
@@ -150,7 +156,8 @@ def _build_split_env(config_path: str, split: str):
 
     train_env, test_env, cfg = make_env(config_path)
     env = test_env if split == "test" else train_env
-    env.max_steps = env.pv.n_steps
+    if not cap_horizon:                       # cf. _build_deployment_env
+        env.max_steps = env.pv.n_steps
     return env, cfg
 
 
@@ -252,6 +259,7 @@ def run(
     deterministic: bool = True,
     show: bool = True,
     vec_normalize: str | None = None,
+    cap_horizon: bool = False,
 ):
     """End-to-end deployment-style rollout + plotting.
 
@@ -290,9 +298,10 @@ def run(
     """
     if split == "full":
         deployment_csv = measures_csv if measures_csv is not None else forecast_csv
-        env, cfg = _build_deployment_env(config_path, deployment_csv, load_csv)
+        env, cfg = _build_deployment_env(config_path, deployment_csv, load_csv,
+                                         cap_horizon=cap_horizon)
     else:
-        env, cfg = _build_split_env(config_path, split)
+        env, cfg = _build_split_env(config_path, split, cap_horizon=cap_horizon)
 
     algo = cfg["training"]["algorithm"]
     print(f"[1/4] Loading {algo} model from {model_path}")
@@ -351,6 +360,17 @@ def run(
         buy_price=buy, sell_price=sell, n_steps=score_steps,
     )
     if score_steps is not None and score_steps < rollout_steps:
+        # Crédit de SoC de bord (cf. evaluation.metrics.boundary_soc_credit / exp22) : le coût
+        # scoré est un préfixe strict du rollout ⇒ créditer l'inventaire batterie porté
+        # au-delà, pour rester cohérent avec le net_cost de run_experiment (RL ET MILP). La
+        # colonne SoC de la table est en POURCENT ⇒ /100 pour la fraction attendue.
+        total_cost -= boundary_soc_credit(
+            soc_end_frac=float(monitoring_df["SoC"].iloc[score_steps - 1]) / 100.0,
+            soc_init_frac=float(cfg["battery"]["init_soc"]),
+            capacity_kwh=float(cfg["battery"]["capacity_kwh"]),
+            eta_discharge=float(cfg["battery"]["efficiency_discharge"]),
+            store_value=float(env._store_value(score_steps - 1)),
+        )
         win_start = monitoring_df.index[0]
         win_end = monitoring_df.index[score_steps - 1]
         print(f"       Coût scoré (jours 1..{score_days}, {score_steps} pas, "
@@ -417,6 +437,10 @@ def main():
     p.add_argument("--no-show", action="store_true",
                    help="Skip plt.show() — useful for batch runs over several "
                         "simulation cases (CSV is still written).")
+    p.add_argument("--cap-horizon", action="store_true",
+                   help="Garde le cap d'entraînement max_steps = n_steps - horizon "
+                        "(ne rejoue PAS le dernier jour, jamais vu à l'entraînement). "
+                        "À utiliser pour le sanity-check overfit (train ≡ replay).")
     args = p.parse_args()
 
     run(
@@ -430,6 +454,7 @@ def main():
         score_days=args.score_days,
         show=not args.no_show,
         vec_normalize=args.vec_normalize,
+        cap_horizon=args.cap_horizon,
     )
 
 
