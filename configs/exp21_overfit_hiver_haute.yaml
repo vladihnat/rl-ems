@@ -1,0 +1,90 @@
+# Sanity check « overfit » (exp21) — fork d'exp19b_Batt400_exportstock.
+#
+# But (demande superviseur) : entraîner ET évaluer sur la MÊME petite fenêtre (hiver_haute,
+# 4 jours), pour répondre à UNE question — le RL peut-il au moins approcher l'optimum MILP sur
+# des données qu'il a VUES, ou la formulation elle-même est-elle cassée ?
+#   - data → fenêtre 4 jours (Jan 1, haute saison) ; l'horizon 24h en consomme 1 → 3 jours
+#     déroulés ; on score les jours 1-2 (score_days=2), le jour 3 tamponne le dump SoC terminal
+#     du MILP (scoring N−1, cf. run_experiment._rescore).
+#   - training.eval_on_train=true → run_experiment construit train=val=test=fenêtre complète
+#     (registry.make_env_overfit), aucun held-out.
+# generate_sweep.py écrase norm_obs / sigma_store / ent_coef / seed + experiment.name pour le
+# « full fix sweep » (cf. plan). La cellule (norm_obs=false, sigma_store=1.0, ent_coef=auto) est
+# le CONTRÔLE identique à exp19b.
+experiment:
+  name: exp21_overfit_hiver_haute
+  seed: 40
+
+time:
+  delta_t_min: 15
+  horizon_h: 24
+
+data:
+  pv_csv: "data/irradiance_simu_hiver_haute_4d.csv"
+  pv_column: "Global30_kW"
+  load_csv: "data/load_simu_hiver_haute_4d.csv"
+  load_column: "Conso_tot"
+
+observation:
+  load_forecast: true
+  price_export_forecast: true
+
+battery:
+  capacity_kwh: 400.0
+  soc_min: 0.2
+  soc_max: 0.9
+  max_charge_kw: 100.0
+  max_discharge_kw: 100.0
+  efficiency_charge: 0.9
+  efficiency_discharge: 0.9
+  init_soc: 0.5
+
+grid:
+  max_import_kw: 500.0
+  max_export_kw: 500.0
+  curtailment: clip
+  price_type: step_hp_hc
+  price_hp: 0.2475
+  price_hc: 0.1895
+  hc_midday: true
+
+load:
+  type: real
+  base_load_kw: 1.0
+
+pv:
+  type: perfect
+  surface_m2: 1600.0
+  eta_ref: 0.20
+
+reward:
+  sigma_soc: 10.0
+  soc_safe_min: 0.2
+  soc_safe_max: 0.9
+  spread_penalty: true
+  store_value:  true
+  sigma_store:  1.0
+  sigma_export_stock: 0.0
+
+training:
+  algorithm: SAC
+  # Fenêtre minuscule (288 pas/épisode) → 500k pas suffisent largement à sur-apprendre,
+  # rapide sur le cluster.
+  total_timesteps: 500_000
+  learning_rate: 0.0003
+  batch_size: 256
+  buffer_size: 750_000
+  gamma: 0.99
+  ent_coef: auto
+  learning_starts: 10000
+  # train_split/val_split sont IGNORÉS quand eval_on_train=true (make_env_overfit prend toute
+  # la fenêtre) — laissés explicites pour la lisibilité.
+  train_split: 1.0
+  val_split:   0.0
+  split_method: temporal
+  random_soc:  false
+  norm_obs:    false
+  norm_reward: false
+  # Sanity check overfit + scoring N−1 (cf. plan / run_experiment) :
+  eval_on_train: true
+  score_days:    2
