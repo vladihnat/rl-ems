@@ -33,6 +33,7 @@ PARAM_MAP = {
     "seed":           "experiment.seed",
     # Leviers ajoutés pour le sweep RL/MILP (exp11) :
     "norm_obs":       "training.norm_obs",
+    "norm_reward":    "training.norm_reward",     # VecNormalize reward (dompte la variance du critic)
     "net_arch":       "training.net_arch",       # valeur liste, ex. 256x256 → [256, 256]
     "ent_coef":       "training.ent_coef",
     "tau":            "training.tau",
@@ -47,6 +48,11 @@ PARAM_MAP = {
     "bc_pretrain_epochs": "training.bc_pretrain_epochs",
     "bc_pretrain_lr":     "training.bc_pretrain_lr",
     "milp_window_days":   "training.milp_window_days",
+    # Sanity check « overfit » : entraîner ET évaluer sur la même fenêtre (exp21+) :
+    "eval_on_train":  "training.eval_on_train",
+    "score_days":     "training.score_days",
+    # Feature d'obs de timing « gap à pic » (optimum-safe, exp23+) :
+    "timing_feature": "observation.timing_feature",
     # PBRS — valeur prix-aware du stock / reward shaping (exp19+) :
     "store_value":    "reward.store_value",
     "sigma_store":    "reward.sigma_store",

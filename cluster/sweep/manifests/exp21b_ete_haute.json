@@ -1,0 +1,362 @@
+[
+  {
+    "index": 0,
+    "config": "configs/sweeps/exp21b_ete_haute/run_000.yaml",
+    "params_override": {
+      "norm_obs": false,
+      "sigma_store": 0.3,
+      "norm_reward": false,
+      "seed": 40
+    }
+  },
+  {
+    "index": 1,
+    "config": "configs/sweeps/exp21b_ete_haute/run_001.yaml",
+    "params_override": {
+      "norm_obs": false,
+      "sigma_store": 0.3,
+      "norm_reward": true,
+      "seed": 40
+    }
+  },
+  {
+    "index": 2,
+    "config": "configs/sweeps/exp21b_ete_haute/run_002.yaml",
+    "params_override": {
+      "norm_obs": false,
+      "sigma_store": 1.0,
+      "norm_reward": false,
+      "seed": 40
+    }
+  },
+  {
+    "index": 3,
+    "config": "configs/sweeps/exp21b_ete_haute/run_003.yaml",
+    "params_override": {
+      "norm_obs": false,
+      "sigma_store": 1.0,
+      "norm_reward": true,
+      "seed": 40
+    }
+  },
+  {
+    "index": 4,
+    "config": "configs/sweeps/exp21b_ete_haute/run_004.yaml",
+    "params_override": {
+      "norm_obs": false,
+      "sigma_store": 2.0,
+      "norm_reward": false,
+      "seed": 40
+    }
+  },
+  {
+    "index": 5,
+    "config": "configs/sweeps/exp21b_ete_haute/run_005.yaml",
+    "params_override": {
+      "norm_obs": false,
+      "sigma_store": 2.0,
+      "norm_reward": true,
+      "seed": 40
+    }
+  },
+  {
+    "index": 6,
+    "config": "configs/sweeps/exp21b_ete_haute/run_006.yaml",
+    "params_override": {
+      "norm_obs": true,
+      "sigma_store": 0.3,
+      "norm_reward": false,
+      "seed": 40
+    }
+  },
+  {
+    "index": 7,
+    "config": "configs/sweeps/exp21b_ete_haute/run_007.yaml",
+    "params_override": {
+      "norm_obs": true,
+      "sigma_store": 0.3,
+      "norm_reward": true,
+      "seed": 40
+    }
+  },
+  {
+    "index": 8,
+    "config": "configs/sweeps/exp21b_ete_haute/run_008.yaml",
+    "params_override": {
+      "norm_obs": true,
+      "sigma_store": 1.0,
+      "norm_reward": false,
+      "seed": 40
+    }
+  },
+  {
+    "index": 9,
+    "config": "configs/sweeps/exp21b_ete_haute/run_009.yaml",
+    "params_override": {
+      "norm_obs": true,
+      "sigma_store": 1.0,
+      "norm_reward": true,
+      "seed": 40
+    }
+  },
+  {
+    "index": 10,
+    "config": "configs/sweeps/exp21b_ete_haute/run_010.yaml",
+    "params_override": {
+      "norm_obs": true,
+      "sigma_store": 2.0,
+      "norm_reward": false,
+      "seed": 40
+    }
+  },
+  {
+    "index": 11,
+    "config": "configs/sweeps/exp21b_ete_haute/run_011.yaml",
+    "params_override": {
+      "norm_obs": true,
+      "sigma_store": 2.0,
+      "norm_reward": true,
+      "seed": 40
+    }
+  },
+  {
+    "index": 12,
+    "config": "configs/sweeps/exp21b_ete_haute/run_012.yaml",
+    "params_override": {
+      "norm_obs": false,
+      "sigma_store": 0.3,
+      "norm_reward": false,
+      "seed": 41
+    }
+  },
+  {
+    "index": 13,
+    "config": "configs/sweeps/exp21b_ete_haute/run_013.yaml",
+    "params_override": {
+      "norm_obs": false,
+      "sigma_store": 0.3,
+      "norm_reward": true,
+      "seed": 41
+    }
+  },
+  {
+    "index": 14,
+    "config": "configs/sweeps/exp21b_ete_haute/run_014.yaml",
+    "params_override": {
+      "norm_obs": false,
+      "sigma_store": 1.0,
+      "norm_reward": false,
+      "seed": 41
+    }
+  },
+  {
+    "index": 15,
+    "config": "configs/sweeps/exp21b_ete_haute/run_015.yaml",
+    "params_override": {
+      "norm_obs": false,
+      "sigma_store": 1.0,
+      "norm_reward": true,
+      "seed": 41
+    }
+  },
+  {
+    "index": 16,
+    "config": "configs/sweeps/exp21b_ete_haute/run_016.yaml",
+    "params_override": {
+      "norm_obs": false,
+      "sigma_store": 2.0,
+      "norm_reward": false,
+      "seed": 41
+    }
+  },
+  {
+    "index": 17,
+    "config": "configs/sweeps/exp21b_ete_haute/run_017.yaml",
+    "params_override": {
+      "norm_obs": false,
+      "sigma_store": 2.0,
+      "norm_reward": true,
+      "seed": 41
+    }
+  },
+  {
+    "index": 18,
+    "config": "configs/sweeps/exp21b_ete_haute/run_018.yaml",
+    "params_override": {
+      "norm_obs": true,
+      "sigma_store": 0.3,
+      "norm_reward": false,
+      "seed": 41
+    }
+  },
+  {
+    "index": 19,
+    "config": "configs/sweeps/exp21b_ete_haute/run_019.yaml",
+    "params_override": {
+      "norm_obs": true,
+      "sigma_store": 0.3,
+      "norm_reward": true,
+      "seed": 41
+    }
+  },
+  {
+    "index": 20,
+    "config": "configs/sweeps/exp21b_ete_haute/run_020.yaml",
+    "params_override": {
+      "norm_obs": true,
+      "sigma_store": 1.0,
+      "norm_reward": false,
+      "seed": 41
+    }
+  },
+  {
+    "index": 21,
+    "config": "configs/sweeps/exp21b_ete_haute/run_021.yaml",
+    "params_override": {
+      "norm_obs": true,
+      "sigma_store": 1.0,
+      "norm_reward": true,
+      "seed": 41
+    }
+  },
+  {
+    "index": 22,
+    "config": "configs/sweeps/exp21b_ete_haute/run_022.yaml",
+    "params_override": {
+      "norm_obs": true,
+      "sigma_store": 2.0,
+      "norm_reward": false,
+      "seed": 41
+    }
+  },
+  {
+    "index": 23,
+    "config": "configs/sweeps/exp21b_ete_haute/run_023.yaml",
+    "params_override": {
+      "norm_obs": true,
+      "sigma_store": 2.0,
+      "norm_reward": true,
+      "seed": 41
+    }
+  },
+  {
+    "index": 24,
+    "config": "configs/sweeps/exp21b_ete_haute/run_024.yaml",
+    "params_override": {
+      "norm_obs": false,
+      "sigma_store": 0.3,
+      "norm_reward": false,
+      "seed": 42
+    }
+  },
+  {
+    "index": 25,
+    "config": "configs/sweeps/exp21b_ete_haute/run_025.yaml",
+    "params_override": {
+      "norm_obs": false,
+      "sigma_store": 0.3,
+      "norm_reward": true,
+      "seed": 42
+    }
+  },
+  {
+    "index": 26,
+    "config": "configs/sweeps/exp21b_ete_haute/run_026.yaml",
+    "params_override": {
+      "norm_obs": false,
+      "sigma_store": 1.0,
+      "norm_reward": false,
+      "seed": 42
+    }
+  },
+  {
+    "index": 27,
+    "config": "configs/sweeps/exp21b_ete_haute/run_027.yaml",
+    "params_override": {
+      "norm_obs": false,
+      "sigma_store": 1.0,
+      "norm_reward": true,
+      "seed": 42
+    }
+  },
+  {
+    "index": 28,
+    "config": "configs/sweeps/exp21b_ete_haute/run_028.yaml",
+    "params_override": {
+      "norm_obs": false,
+      "sigma_store": 2.0,
+      "norm_reward": false,
+      "seed": 42
+    }
+  },
+  {
+    "index": 29,
+    "config": "configs/sweeps/exp21b_ete_haute/run_029.yaml",
+    "params_override": {
+      "norm_obs": false,
+      "sigma_store": 2.0,
+      "norm_reward": true,
+      "seed": 42
+    }
+  },
+  {
+    "index": 30,
+    "config": "configs/sweeps/exp21b_ete_haute/run_030.yaml",
+    "params_override": {
+      "norm_obs": true,
+      "sigma_store": 0.3,
+      "norm_reward": false,
+      "seed": 42
+    }
+  },
+  {
+    "index": 31,
+    "config": "configs/sweeps/exp21b_ete_haute/run_031.yaml",
+    "params_override": {
+      "norm_obs": true,
+      "sigma_store": 0.3,
+      "norm_reward": true,
+      "seed": 42
+    }
+  },
+  {
+    "index": 32,
+    "config": "configs/sweeps/exp21b_ete_haute/run_032.yaml",
+    "params_override": {
+      "norm_obs": true,
+      "sigma_store": 1.0,
+      "norm_reward": false,
+      "seed": 42
+    }
+  },
+  {
+    "index": 33,
+    "config": "configs/sweeps/exp21b_ete_haute/run_033.yaml",
+    "params_override": {
+      "norm_obs": true,
+      "sigma_store": 1.0,
+      "norm_reward": true,
+      "seed": 42
+    }
+  },
+  {
+    "index": 34,
+    "config": "configs/sweeps/exp21b_ete_haute/run_034.yaml",
+    "params_override": {
+      "norm_obs": true,
+      "sigma_store": 2.0,
+      "norm_reward": false,
+      "seed": 42
+    }
+  },
+  {
+    "index": 35,
+    "config": "configs/sweeps/exp21b_ete_haute/run_035.yaml",
+    "params_override": {
+      "norm_obs": true,
+      "sigma_store": 2.0,
+      "norm_reward": true,
+      "seed": 42
+    }
+  }
+]
