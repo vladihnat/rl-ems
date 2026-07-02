@@ -1,13 +1,18 @@
-# Tâche SIMPLIFIÉE « prix fixes » (exp22) — fenêtre ETE_HAUTE (juillet).
+# exp24 — relâchement de la contrainte no-grid-charging (milpIncoherences.md #5), ETE_HAUTE.
 #
-# Fork IDENTIQUE à configs/exp22_hiver_haute.yaml, SEULES les données changent (fenêtre 4 j juillet).
-# Prix plats import 0.15 / export 0.04 €/kWh : pas d'arbitrage temporel ⇒ isole l'auto-consommation
-# du timing. Complément du hiver_haute (PV faible) sur un régime à PV fort (la batterie charge
-# beaucoup). Si le gap RL↔MILP s'effondre dans les deux, le résiduel d'exp21b est bien du timing prix.
-# generate_sweep.py écrase norm_obs / sigma_store / norm_reward / seed + experiment.name.
+# Fork d'exp22_ete_haute (prix fixes 0.15/0.04, overfit train==eval, fenêtre 4 j, score_days 2).
+# But : vérification RAPIDE de l'effet du mode de charge batterie sur le gap RL↔MILP, en NE variant
+# QUE battery.pv_charge_mode (surplus ↔ total) sur la MEILLEURE config exp22 ete_haute
+# (sigma_store=1.0, norm_obs=true, norm_reward=false, seed=42). Pas de sweep complet : le générateur
+# n'écrase que pv_charge_mode (+ seed). run_000=surplus, run_001=total.
+#
+# Régime à PV FORT : c'est le cas où l'écart "charge ≤ surplus" vs "charge ≤ pv" est le plus grand
+# en énergie. Rappel : à prix plats (export 0.04 ≪ import 0.15) l'optimum MILP reste ~identique
+# (le round-trip perd du rendement sans gain de prix) ⇒ exp24 teste surtout la robustesse du RL à
+# l'espace d'action élargi. Le bénéfice économique de #5 exige des prix VARIABLES (suivi à prévoir).
 experiment:
-  name: exp22_ete_haute
-  seed: 40
+  name: exp24_ete_haute
+  seed: 42
 
 time:
   delta_t_min: 15
@@ -24,7 +29,6 @@ observation:
   price_export_forecast: false   # no-op sous prix fixes (has_forecast=False) — explicité pour la clarté
 
 battery:
-  pv_charge_mode: surplus   # pin historique - defaut code = total (flux relache Duchaud-JL)
   capacity_kwh: 400.0
   soc_min: 0.2
   soc_max: 0.9
@@ -33,6 +37,7 @@ battery:
   efficiency_charge: 0.9
   efficiency_discharge: 0.9
   init_soc: 0.5
+  pv_charge_mode: surplus   # surplus (strict) | total (relâché Duchaud-JL) — écrasé par le sweep
 
 grid:
   max_import_kw: 500.0
@@ -73,7 +78,7 @@ training:
   val_split:   0.0
   split_method: temporal
   random_soc:  false
-  norm_obs:    false
+  norm_obs:    true
   norm_reward: false
   eval_on_train: true
   score_days:    2

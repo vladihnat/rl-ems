@@ -25,6 +25,7 @@ observation:
   price_export_forecast: true
 
 battery:
+  pv_charge_mode: surplus   # pin historique - defaut code = total (flux relache Duchaud-JL)
   capacity_kwh: 400.0
   soc_min: 0.2
   soc_max: 0.9

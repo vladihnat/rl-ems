@@ -13,6 +13,7 @@ data:
   # Columns used from the CSV: hour_sin, hour_cos, doy_sin, doy_cos, Global30_kW
 
 battery:
+  pv_charge_mode: surplus   # pin historique - defaut code = total (flux relache Duchaud-JL)
   capacity_kwh: 24.0           # 30kWh * 0.8 usable
   soc_min: 0.2
   soc_max: 0.9

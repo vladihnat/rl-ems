@@ -1,19 +1,19 @@
-# Tâche SIMPLIFIÉE « prix fixes » (exp22) — fork d'exp21_overfit_hiver_haute.
+# exp24 — relâchement de la contrainte no-grid-charging (milpIncoherences.md #5), HIVER_HAUTE.
 #
-# But (demande superviseur) : supprimer l'arbitrage temporel pour ISOLER l'auto-consommation du
-# timing prix. Prix plats import 0.15 / export 0.04 €/kWh (pas de HP/HC ni de grille CoutsProd).
-# Sous export ≪ import et prix constant, l'optimum se réduit à : charger le surplus PV, décharger
-# pour servir la charge, ne jamais exporter le stock — le MOMENT de la décharge devient
-# économiquement neutre. Si le RL ne rejoint toujours pas le MILP ici, le défaut est dans la
-# gestion capacité/SoC, PAS dans le timing (cf. dump t0 de la tâche à prix variables).
+# Fork d'exp22_hiver_haute (prix fixes 0.15/0.04, overfit train==eval, fenêtre 4 j, score_days 2).
+# But : vérification RAPIDE de l'effet du mode de charge batterie sur le gap RL↔MILP, en NE variant
+# QUE battery.pv_charge_mode (surplus ↔ total) sur la MEILLEURE config exp22 hiver_haute
+# (sigma_store=2.0, norm_obs=true, norm_reward=false, seed=42). Pas de sweep complet : le générateur
+# n'écrase que pv_charge_mode (+ seed). run_000=surplus, run_001=total.
 #
-# Conséquences de price_type=fixed (cf. envs/components/price_signal.py) : has_forecast=False ⇒
-# pas de forecast prix dans l'obs (obs 393→201 : 9 + pv_fc 96 + load_fc 96) ; _store_value retombe
-# sur v=0.15 constant (PBRS toujours valide, télescope en −Φ(s₀)) ; spread_penalty actif (imp−exp=0.11).
-# generate_sweep.py écrase norm_obs / sigma_store / norm_reward / seed + experiment.name.
+# Rappel : sous prix plats (export 0.04 ≪ import 0.15) l'optimum MILP est ~identique en surplus/total
+# (charger le PV-qui-servirait-la-charge et importer à la place ne perd que le rendement aller-retour,
+# sans gain de prix). exp24 teste donc surtout si l'espace d'action ÉLARGI ("total") gêne le RL à
+# atteindre l'optimum dans le cadre overfit propre. Le bénéfice économique de #5 (arbitrage été soir)
+# n'apparaît qu'à prix VARIABLES (suivi à prévoir).
 experiment:
-  name: exp22_hiver_haute
-  seed: 40
+  name: exp24_hiver_haute
+  seed: 42
 
 time:
   delta_t_min: 15
@@ -30,7 +30,6 @@ observation:
   price_export_forecast: false   # no-op sous prix fixes (has_forecast=False) — explicité pour la clarté
 
 battery:
-  pv_charge_mode: surplus   # pin historique - defaut code = total (flux relache Duchaud-JL)
   capacity_kwh: 400.0
   soc_min: 0.2
   soc_max: 0.9
@@ -39,6 +38,7 @@ battery:
   efficiency_charge: 0.9
   efficiency_discharge: 0.9
   init_soc: 0.5
+  pv_charge_mode: surplus   # surplus (strict) | total (relâché Duchaud-JL) — écrasé par le sweep
 
 grid:
   max_import_kw: 500.0
@@ -63,7 +63,7 @@ reward:
   soc_safe_max: 0.9
   spread_penalty: true
   store_value:  true
-  sigma_store:  1.0
+  sigma_store:  2.0
   sigma_export_stock: 0.0
 
 training:
@@ -79,7 +79,7 @@ training:
   val_split:   0.0
   split_method: temporal
   random_soc:  false
-  norm_obs:    false
+  norm_obs:    true
   norm_reward: false
   eval_on_train: true
   score_days:    2
