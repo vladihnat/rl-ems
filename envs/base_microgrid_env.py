@@ -59,6 +59,17 @@ class MicrogridEnv(gym.Env):
         self.max_charge_kw = config["battery"]["max_charge_kw"]
         self.max_discharge_kw = config["battery"]["max_discharge_kw"]
 
+        # Contrainte EDF no-grid-charging — deux formulations (cf. temp_md/milpIncoherences.md #5),
+        # DOIT être identique à celle du MILP (baselines/milp_solver.py) pour que le gap RL↔MILP
+        # reste mesuré sur la même physique. "total" (défaut, relâché Duchaud-JL split-node) :
+        # charge ≤ pv (le réseau sert la charge en //) ; "surplus" (strict, historique) :
+        # charge ≤ max(0, pv−load). Les configs antérieures au flux relâché épinglent surplus.
+        self._pv_charge_mode = config["battery"].get("pv_charge_mode", "total")
+        if self._pv_charge_mode not in ("surplus", "total"):
+            raise ValueError(
+                f"Unknown battery.pv_charge_mode={self._pv_charge_mode!r}; use 'surplus' or 'total'."
+            )
+
         self._load_forecast_in_obs = config.get("observation", {}).get("load_forecast", False)
         self._price_export_fc_in_obs = config.get("observation", {}).get("price_export_forecast", False)
         # Feature de timing (optimum-safe, pur input — ne touche ni reward ni dynamique) : « gap à
@@ -216,13 +227,16 @@ class MicrogridEnv(gym.Env):
         else:
             Pb_command = action_val * self.max_discharge_kw
 
-        # Contrainte EDF : interdiction de charger la batterie depuis le réseau. La batterie
-        # ne peut absorber que le surplus PV (pv - load). Pb_command < 0 = charge ; on borne
-        # sa magnitude au surplus (si pv ≤ load, surplus = 0 ⇒ charge interdite). Identique à
-        # la borne MILP (Pb_charge ≤ max(0, pv - load)) pour que RL et MILP modélisent la même
-        # physique. Ainsi la charge ne provoque jamais d'import réseau.
+        # Contrainte EDF : interdiction de charger la batterie DEPUIS LE RÉSEAU. Pb_command < 0 =
+        # charge ; on borne sa magnitude selon pv_charge_mode (identique à la borne MILP pour que
+        # RL et MILP modélisent la même physique) :
+        #   - "surplus" (strict) : charge ≤ max(0, pv − load) — si pv ≤ load, charge interdite.
+        #   - "total" (Duchaud-JL) : charge ≤ pv — la batterie absorbe tout le PV pendant que le
+        #     réseau sert la charge (P_grid_raw = load ci-dessous ⇒ import = charge, jamais →batt).
+        # Dans les deux cas la charge ≤ PV ⇒ ne provoque jamais d'import réseau vers la batterie.
         if Pb_command < 0.0:
-            Pb_command = max(Pb_command, -max(0.0, pv_t - load_t))
+            charge_cap = pv_t if self._pv_charge_mode == "total" else max(0.0, pv_t - load_t)
+            Pb_command = max(Pb_command, -charge_cap)
 
         soc_old = self.battery.soc  # avant battery.step, pour le potentiel PBRS Φ(s_t)
         Pb_effective, new_soc = self.battery.step(Pb_command, self.delta_t_h)

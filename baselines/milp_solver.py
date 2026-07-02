@@ -86,12 +86,27 @@ def run_milp(env, config: dict) -> dict:
 
     constraints.append(Pb == Pb_discharge - Pb_charge)
 
-    # Contrainte EDF : interdiction de charger la batterie depuis le réseau. La batterie ne
-    # peut absorber que le surplus PV (PV au-delà de la charge instantanée). pv/load sont des
-    # données ⇒ borne constante, donc linéaire. Empêche tout import réseau d'alimenter la
-    # batterie ET toute « libération » de PV vers la batterie pour l'arbitrage HC→soir.
-    pv_surplus = np.maximum(0.0, pv_vals - load_vals)
-    constraints.append(Pb_charge <= pv_surplus)
+    # Contrainte EDF : interdiction de charger la batterie DEPUIS LE RÉSEAU. Deux formulations,
+    # pilotées par battery.pv_charge_mode (cf. temp_md/milpIncoherences.md #5). Les deux bornent
+    # Pb_charge par des DONNÉES pv/load ⇒ borne constante, donc linéaire, et interdisent tout
+    # import réseau d'alimenter la batterie (charge ≤ PV produit) :
+    #   - "total" (DÉFAUT, relâché, fidèle à Duchaud-JL @EmsLinprog split-node : Ppv_b ≤ PV,
+    #     Pg_l ≤ load) : la batterie peut absorber TOUT le PV (Pb_charge ≤ pv) pendant que le
+    #     réseau sert la charge indépendamment. Autorise l'arbitrage été (charge PV le jour →
+    #     export du soir). Régime cible de toutes les nouvelles expériences.
+    #   - "surplus" (STRICT, historique) : la batterie n'absorbe que le surplus PV au-delà de la
+    #     charge instantanée (Pb_charge ≤ max(0, pv−load)). Bloque toute « libération » de PV vers
+    #     la batterie pendant que le réseau sert la charge. Les configs antérieures l'épinglent.
+    pv_charge_mode = cfg["battery"].get("pv_charge_mode", "total")
+    if pv_charge_mode == "total":
+        constraints.append(Pb_charge <= pv_vals)
+    elif pv_charge_mode == "surplus":
+        pv_surplus = np.maximum(0.0, pv_vals - load_vals)
+        constraints.append(Pb_charge <= pv_surplus)
+    else:
+        raise ValueError(
+            f"Unknown battery.pv_charge_mode={pv_charge_mode!r}; use 'surplus' or 'total'."
+        )
 
     for t in range(T):
         soc_change = (Pb_charge[t] * eta_c - Pb_discharge[t] / eta_d) * delta_t_h / capacity
@@ -106,13 +121,40 @@ def run_milp(env, config: dict) -> dict:
     # Pénalité fantôme ≫ tout prix d'import ⇒ le solveur épuise d'abord le réseau réel
     # (P_imp = max_imp) avant de recourir à la puissance fantôme. Défaut 1e3 €/kWh (Duchaud-JL).
     phantom_penalty = cfg["grid"].get("phantom_penalty", 1e3)
+
+    # Tie-break lexicographique (opt-in, défaut OFF). Sous prix plats (exp22), l'optimum
+    # est dégénéré : import/export figés, timing libre ⇒ toute une face de trajectoires
+    # au même coût, et HiGHS en renvoie un sommet arbitraire ⇒ le tracé MILP « clignote »
+    # d'un solve à l'autre. Un ε·tilt strictement croissant sur les flux flexibles dans le
+    # temps préfère « agir tôt » et rend l'optimum unique → tracé déterministe. ε ≪ coût
+    # économique ⇒ ne change pas le coût rapporté (recalculé hors de ce terme par replay).
+    milp_cfg = cfg.get("milp", {})
+    tie_eps = float(milp_cfg.get("tie_break_eps", 0.0))
+    tie_break = 0
+    if tie_eps > 0.0:
+        tilt = np.linspace(0.0, 1.0, T)
+        tie_break = tie_eps * cp.sum(
+            cp.multiply(tilt, Pb_discharge + Pb_charge + P_imp + P_exp)
+        )
+
     objective = cp.Minimize(
         (cp.sum(cp.multiply(price_imp, P_imp) - cp.multiply(price_exp, P_exp))
          + phantom_penalty * cp.sum(P_phantom)) * delta_t_h
+        + tie_break
     )
 
     prob = cp.Problem(objective, constraints)
-    prob.solve(solver=cp.HIGHS, verbose=False)
+    # Déterminisme du solveur : HiGHS multithread renvoie un sommet arbitraire de la face
+    # optimale dégénérée à chaque solve → le tracé MILP « clignote » d'un run à l'autre, même
+    # avec le tie-break (la dégénérescence sur les binaires b/g_grid n'est pas figée par un ε
+    # sur les flux continus). parallel="off" + random_seed fixe ⇒ HiGHS est une fonction
+    # déterministe de l'entrée (même résultat à chaque run). Quand le tie-break est actif, on
+    # ferme le gap MIP à 0 pour que l'optimum unique du tilt soit réellement atteint.
+    solver_options = {"parallel": "off", "random_seed": 0}
+    if tie_eps > 0.0:
+        solver_options.update(mip_rel_gap=0.0, mip_abs_gap=0.0)
+    solver_options.update(milp_cfg.get("solver_options", {}))  # override explicite gagne
+    prob.solve(solver=cp.HIGHS, verbose=False, **solver_options)
 
     if prob.status not in ("optimal", "optimal_inaccurate"):
         raise RuntimeError(f"MILP solver failed: {prob.status}")

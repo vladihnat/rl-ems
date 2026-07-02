@@ -31,6 +31,8 @@ PARAM_MAP = {
     "buffer_size":    "training.buffer_size",
     "sigma_soc":      "reward.sigma_soc",
     "seed":           "experiment.seed",
+    # Contrainte EDF no-grid-charging : "surplus" (strict) | "total" (relâché Duchaud-JL, exp24+) :
+    "pv_charge_mode": "battery.pv_charge_mode",
     # Leviers ajoutés pour le sweep RL/MILP (exp11) :
     "norm_obs":       "training.norm_obs",
     "norm_reward":    "training.norm_reward",     # VecNormalize reward (dompte la variance du critic)

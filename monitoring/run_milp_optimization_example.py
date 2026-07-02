@@ -100,6 +100,8 @@ def run(
     score_days: int | None = None,
     show: bool = True,
     cap_horizon: bool = False,
+    tie_break_eps: float = 0.0,
+    pv_charge_mode: str | None = None,
 ):
     """End-to-end MILP example: solve + env-replay + dump + plot.
 
@@ -139,6 +141,24 @@ def run(
                                          cap_horizon=cap_horizon)
     else:
         env, cfg = _build_split_env(config_path, split, cap_horizon=cap_horizon)
+
+    # Tie-break lexicographique opt-in (figures déterministes sur l'optimum dégénéré).
+    # Injecté dans cfg pour que run_milp le lise sans changer sa signature ; défaut 0.0
+    # ⇒ baseline MILP inchangée partout ailleurs. cf. baselines/milp_solver.py.
+    cfg.setdefault("milp", {})["tie_break_eps"] = tie_break_eps
+
+    # Surcharge optionnelle de la contrainte no-grid-charging (cf. milpIncoherences.md #5).
+    # Injectée dans cfg pour que run_milp la lise ; None ⇒ on garde battery.pv_charge_mode du
+    # config (défaut "surplus"). Permet à un seul config de servir les deux modes pour les plots.
+    # On synchronise AUSSI l'env : le replay des consignes MILP passe par env.step(), dont le
+    # clamp de charge doit modéliser le même mode (sinon un plan "total" serait ré-écrêté au surplus).
+    if pv_charge_mode is not None:
+        if pv_charge_mode not in ("surplus", "total"):
+            raise ValueError(
+                f"Unknown --pv-charge-mode={pv_charge_mode!r}; use 'surplus' or 'total'."
+            )
+        cfg["battery"]["pv_charge_mode"] = pv_charge_mode
+        env._pv_charge_mode = pv_charge_mode
 
     print(f"[1/4] Solving MILP (T = {env.max_steps} steps, "
           f"Δt = {env.delta_t_min} min)")
@@ -299,6 +319,16 @@ def main():
                    help="Garde le cap max_steps = n_steps - horizon (le MILP planifie "
                         "le même horizon que l'entraînement RL). À utiliser pour le "
                         "sanity-check overfit (MILP ≡ horizon vu par le RL).")
+    p.add_argument("--tie-break-eps", type=float, default=0.0,
+                   help="Tie-break lexicographique ε (défaut 0 = off). Sous prix plats, "
+                        "l'optimum MILP est dégénéré (timing libre) et le tracé clignote. "
+                        "ε>0 ajoute un poids ε·tilt croissant sur les flux flexibles → "
+                        "optimum unique, tracé déterministe, coût rapporté inchangé. "
+                        "Cible ~1e-5 ; ne pas mettre trop grand (déforme le coût).")
+    p.add_argument("--pv-charge-mode", default=None, choices=["surplus", "total"],
+                   help="Contrainte no-grid-charging (cf. milpIncoherences.md #5) : 'surplus' "
+                        "(strict, charge ≤ max(0, pv−load)) | 'total' (relâché Duchaud-JL, "
+                        "charge ≤ pv). Défaut : None ⇒ garde battery.pv_charge_mode du config.")
     args = p.parse_args()
 
     run(
@@ -312,6 +342,8 @@ def main():
         score_days=args.score_days,
         show=not args.no_show,
         cap_horizon=args.cap_horizon,
+        tie_break_eps=args.tie_break_eps,
+        pv_charge_mode=args.pv_charge_mode,
     )
 
 
