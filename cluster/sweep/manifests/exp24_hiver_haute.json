@@ -1,0 +1,18 @@
+[
+  {
+    "index": 0,
+    "config": "configs/sweeps/exp24_hiver_haute/run_000.yaml",
+    "params_override": {
+      "pv_charge_mode": "surplus",
+      "seed": 42
+    }
+  },
+  {
+    "index": 1,
+    "config": "configs/sweeps/exp24_hiver_haute/run_001.yaml",
+    "params_override": {
+      "pv_charge_mode": "total",
+      "seed": 42
+    }
+  }
+]
