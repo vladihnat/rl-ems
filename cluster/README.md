@@ -66,7 +66,9 @@ ssh HERRERA-NATIVI_V@193.48.30.217 "squeue -u $USER"
 
 ### Paramètres disponibles pour le sweep
 
-Alignés sur `PARAM_MAP` dans `cluster/sweep/generate_sweep.py`.
+Alignés sur `PARAM_MAP` dans `cluster/sweep/generate_sweep.py` (clé CLI → chemin YAML). Regroupés par thème ci-dessous ; toute combinaison est mélangeable dans un même sweep.
+
+**Cœur HP & normalisation**
 
 | Param CLI | Clé YAML | Exemple |
 |-----------|----------|---------|
@@ -75,14 +77,66 @@ Alignés sur `PARAM_MAP` dans `cluster/sweep/generate_sweep.py`.
 | `batch_size` | `training.batch_size` | `256,512` |
 | `buffer_size` | `training.buffer_size` | `300000,750000` |
 | `sigma_soc` | `reward.sigma_soc` | `5.0,10.0,20.0` |
-| `seed` | `experiment.seed` | via `--seeds` |
-| `norm_obs` | `training.norm_obs` | `true,false` |
 | `net_arch` | `training.net_arch` | `256x256,400x400x300` |
 | `ent_coef` | `training.ent_coef` | `auto,0.05` |
 | `tau` | `training.tau` | `0.005,0.01` |
 | `train_freq` | `training.train_freq` | `1,4` |
 | `gradient_steps` | `training.gradient_steps` | `1,2` |
 | `total_timesteps` | `training.total_timesteps` | `1000000,2000000` |
+| `norm_obs` | `training.norm_obs` | `true,false` |
+| `norm_reward` | `training.norm_reward` | `true,false` |
+| `seed` | `experiment.seed` | via `--seeds` |
+
+**Leviers comportementaux (exp14+)**
+
+| Param CLI | Clé YAML | Exemple |
+|-----------|----------|---------|
+| `learning_starts` | `training.learning_starts` | `10000` |
+| `random_soc` | `training.random_soc` | `true,false` |
+| `warm_start_milp` | `training.warm_start_milp` | `true,false` |
+
+**Behavior Cloning depuis le MILP (exp17+)**
+
+| Param CLI | Clé YAML | Exemple |
+|-----------|----------|---------|
+| `bc_pretrain_epochs` | `training.bc_pretrain_epochs` | `0,20` |
+| `bc_pretrain_lr` | `training.bc_pretrain_lr` | `0.0003` |
+| `milp_window_days` | `training.milp_window_days` | `1,2` |
+
+**Ancre MILP persistante — WS-1c (exp18+)**
+
+| Param CLI | Clé YAML | Exemple |
+|-----------|----------|---------|
+| `bc_anchor_demo_buffer` | `training.bc_anchor_demo_buffer` | `true,false` |
+| `bc_anchor_demo_frac` | `training.bc_anchor_demo_frac` | `0.25` |
+| `bc_anchor_loss` | `training.bc_anchor_loss` | `true,false` |
+| `bc_anchor_lambda` | `training.bc_anchor_lambda` | `1.0` |
+| `bc_anchor_lambda_final` | `training.bc_anchor_lambda_final` | `0.1` |
+| `bc_anchor_loss_batch` | `training.bc_anchor_loss_batch` | `256` |
+
+**AWAC — BC pondéré par l'avantage critique (exp20+)**
+
+| Param CLI | Clé YAML | Exemple |
+|-----------|----------|---------|
+| `bc_anchor_awac` | `training.bc_anchor_awac` | `true,false` |
+| `bc_anchor_awac_beta` | `training.bc_anchor_awac_beta` | `1.0` |
+| `bc_anchor_awac_wmax` | `training.bc_anchor_awac_wmax` | `20.0` |
+
+**Reward shaping PBRS (exp19+)**
+
+| Param CLI | Clé YAML | Exemple |
+|-----------|----------|---------|
+| `store_value` | `reward.store_value` | `true,false` |
+| `sigma_store` | `reward.sigma_store` | `0.5,1.0` |
+| `sigma_export_stock` | `reward.sigma_export_stock` | `0.0,1.0` |
+
+**Overfit / scoring (exp21+) & feature de timing (exp23+)**
+
+| Param CLI | Clé YAML | Exemple |
+|-----------|----------|---------|
+| `eval_on_train` | `training.eval_on_train` | `true,false` |
+| `score_days` | `training.score_days` | `1,2` |
+| `timing_feature` | `observation.timing_feature` | `true,false` |
 
 **Encodage des valeurs :**
 - `net_arch` : couches séparées par `x` (pas de virgule interne) → `256x256` → `[256, 256]`, `400x400x300` → `[400, 400, 300]`.
@@ -128,6 +182,17 @@ tient même sans cap, mais le throttle reste la bonne pratique — et devient in
 2. Relancer `generate_sweep.py` avec `--base-config configs/exp09_new.yaml`
 3. `./cluster/sweep/launch_sweep.sh <sweep_name>`
 
+### Re-scoring sans réentraîner
+
+Le scoring est un **post-traitement** (cf. crédit de SoC de bord, `evaluation.metrics.boundary_soc_credit`) : les `metrics.json`/`comparison.json` écrits pendant l'entraînement sont figés à l'ancien scoring. `rescore_runs.py` relance, pour chaque run, `run_experiment.py --config <run>/config_used.yaml --rescore` qui recharge le modèle déjà sauvegardé et régénère ces JSON avec le scoring courant — **les `.zip`/`.pkl`/`.npz` (donc la sélection best-model) restent intacts**.
+
+```bash
+# Régénère metrics.json/comparison.json depuis les modèles sauvegardés (sans réentraîner)
+python cluster/sweep/rescore_runs.py exp22_hiver_haute exp22_ete_haute
+# Agrège les gaps (corrigés) par sweep
+python cluster/sweep/aggregate_results.py exp22_hiver_haute
+```
+
 ---
 
 ## Expérience unique (fallback)
@@ -150,7 +215,9 @@ cluster/
 ├── sweep/
 │   ├── generate_sweep.py              # générateur de grille
 │   ├── launch_sweep.sh                # push + sbatch array
-│   └── manifests/                     # JSONs générés (gitignorés)
+│   ├── aggregate_results.py           # agrégation des gaps par sweep
+│   ├── rescore_runs.py                # re-scoring post-traitement (sans réentraîner)
+│   └── manifests/                     # JSONs générés (exp10 → exp23)
 ├── transfer/
 │   ├── push.sh                        # local → cluster
 │   └── pull_results.sh               # cluster → local
