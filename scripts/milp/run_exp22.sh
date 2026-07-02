@@ -19,6 +19,11 @@ cd "$ROOT"
 CASE="${1:-${CASE:-hiver_haute}}"
 if [ "$#" -gt 0 ]; then shift; fi
 
+# Tie-break lexicographique ε : sous prix plats, l'optimum MILP hiver_haute est dégénéré
+# (timing libre) et le tracé plot_power clignote d'un solve à l'autre. ε>0 le rend unique →
+# figure déterministe, coût rapporté inchangé. Surchargeable : TIE_BREAK_EPS=0 désactive.
+TIE_BREAK_EPS="${TIE_BREAK_EPS:-1e-5}"
+
 WINDOW="${CASE}_4d"
 CONFIG="configs/exp22_${CASE}.yaml"
 PV="data/irradiance_simu_${WINDOW}.csv"
@@ -47,4 +52,5 @@ micromamba run -n stageCorse python -m monitoring.run_milp_optimization_example 
     --plan-out "$PLAN_OUT" \
     --score-days 2 \
     --cap-horizon \
+    --tie-break-eps "$TIE_BREAK_EPS" \
     "$@"
