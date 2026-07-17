@@ -1,0 +1,50 @@
+[
+  {
+    "index": 0,
+    "config": "configs/sweeps/exp26_ete_haute/run_000.yaml",
+    "params_override": {
+      "sigma_store": 0.3,
+      "seed": 40
+    }
+  },
+  {
+    "index": 1,
+    "config": "configs/sweeps/exp26_ete_haute/run_001.yaml",
+    "params_override": {
+      "sigma_store": 1.0,
+      "seed": 40
+    }
+  },
+  {
+    "index": 2,
+    "config": "configs/sweeps/exp26_ete_haute/run_002.yaml",
+    "params_override": {
+      "sigma_store": 0.3,
+      "seed": 41
+    }
+  },
+  {
+    "index": 3,
+    "config": "configs/sweeps/exp26_ete_haute/run_003.yaml",
+    "params_override": {
+      "sigma_store": 1.0,
+      "seed": 41
+    }
+  },
+  {
+    "index": 4,
+    "config": "configs/sweeps/exp26_ete_haute/run_004.yaml",
+    "params_override": {
+      "sigma_store": 0.3,
+      "seed": 42
+    }
+  },
+  {
+    "index": 5,
+    "config": "configs/sweeps/exp26_ete_haute/run_005.yaml",
+    "params_override": {
+      "sigma_store": 1.0,
+      "seed": 42
+    }
+  }
+]

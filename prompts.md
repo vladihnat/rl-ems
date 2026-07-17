@@ -1564,3 +1564,26 @@ Plan — Diagnostiquer & observer l'anomalie RL < MILP (exp_testCluster)
     à côte.
     5. Backend Agg (MPLBACKEND=Agg) + --no-show pour la validation non interactive ; inspecter
     les CSV (Pph, métriques) pour confirmer les écarts RL/MILP.
+
+
+Amelioration and corrections with fable : 
+
+    With the experiment 22 (exp22_{hiver_haute, ete_haute}) we validated our model with an overfit on the easiest regime, i.e. fixed import and export prices + PV (forecast) + load (forecast) and it worked (the RL approachs the MILP's optimum within a 2% gap). However when going into the variable prices regime the results is not at all the same, in exp23 we used a store penalty plus we gave the agent an observation of a timing_feature.  
+    For this experimentation we compared directly to the results of the exp21b, however this time the sweep is for the usage of timing_feature (true or false), the equivalents between the experiment 21b and 23 are : 
+    {
+      006 : 000, 003
+      008 : 001, 004
+      010 : 002, 005
+      018 : 006, 009
+      020 : 007, 010
+      022 : 008, 011
+      030 : 012, 015
+      032 : 013, 016
+      034 : 014, 017
+    }
+    Thus the runs of the exp23 (000,001,002,006,007,008,012,13,014) with timing_feature:false are the ones corresponding to the results of the exp21b and hence (003,004,005,009,010,011,015,16,017) are the runs with the observation add-on. Here two cases should be distinguished, the behaviour on summer (ete_haute) and winter (hiver_haute), on summer price regimes the usage of the timing_feature either slightly reduce the %gap or stay within the same range, however when running the simulations (here we pick the run_011 as our best summer example) we see that the behaviour does not properly fit the MILP, both systems detect the need for "big blocks" of discharge however the RL seems to be tacking decision that don't earn enough (even if it empties the battery at the end of the optimization window). On the case of winter (we choose the run_015 as the one with best behavior), the improvement of the timing feature is very small, in some cases such as for the run_17 it even gets much worse. In both cases we observe the same t0 dump.
+
+    With this context I'm wondering if there is a potential mistake in any of our implementations (MILP or RL), e.g. at first we believed that the big blocks of discharge where a RL pathonegic behavior but turn out to be that the MILP finds the same after the grid complementarity fix, hence I'm wondering if the t0 dump might actually be a behavior that is not incorrect but perhaps only another potential optimal solution (even thought the RL net cost is usually "worse" than the MILP's)
+
+    Your have 2 task : first verify the logic of both systems and check if there is any implementation "mistakes"
+    Second task propose a plan to improve the RL, either by making a new sweep or my adding a better system 

@@ -78,6 +78,18 @@ class MicrogridEnv(gym.Env):
         # sinon extraire lui-même du vecteur forecast (et ratait → dump t0). Exige un forecast prix
         # (has_forecast) ; inerte sous prix fixes (=0). Défaut OFF ⇒ obs des configs existantes inchangées.
         self._timing_feat = config.get("observation", {}).get("timing_feature", False)
+        # v2 (exp25) : 4 scalaires au lieu du gap agrégé — le scalaire v1 dit « attendre » mais
+        # ni COMBIEN DE TEMPS ni OÙ (il ne distingue pas la bosse export matinale ~9h du pic du
+        # soir ~21h de la grille CoutsProd, cf. audit exp23 : décharge du soir démarrée ~1h trop
+        # tôt, heure 21-22h à 0.442 ratée). Mêmes garanties que v1 : pur input (optimum-safe),
+        # exige has_forecast, défaut OFF. Cumulable avec timing_feature (dims indépendantes).
+        self._timing_feats_v2 = config.get("observation", {}).get("timing_features_v2", False)
+        # v3 (exp29) : 2 scalaires CHARGE-side — v2 est orienté export-max et ne dit rien du
+        # meilleur moment pour CHARGER (= pas de l'horizon au prix d'export le plus BAS parmi
+        # ceux où la charge est faisable, i.e. surplus PV > 0). Cf. audit exp28 : biais « charger
+        # trop tôt » = 75 % du gap résiduel hiver (charge à 11h/0.201 au lieu de 12-15h/0.181-0.191).
+        # Mêmes garanties que v1/v2 : pur input (optimum-safe), exige has_forecast, défaut OFF.
+        self._timing_feats_v3 = config.get("observation", {}).get("timing_features_v3", False)
         self._spread_penalty = config["reward"].get("spread_penalty", False)
         self._sigma_bat = config["reward"].get("sigma_bat", 0.0)
         self._random_soc = config.get("training", {}).get("random_soc", False)
@@ -88,12 +100,49 @@ class MicrogridEnv(gym.Env):
         self._store_shaping = config["reward"].get("store_value", False)
         self._sigma_store = config["reward"].get("sigma_store", 1.0)
         self._gamma_shaping = config.get("training", {}).get("gamma", 0.99)
+        # Source de la valeur v(t) du potentiel Φ (exp26) : "horizon_max" (défaut, heuristique
+        # max forecast — survalorise le stock : ignore la limite de puissance et ne décroît pas
+        # après le pic) | "milp_dual" (λ(t) exact du LP à binaires figés, cf.
+        # baselines/milp_solver.milp_soc_duals — calculé paresseusement au premier reset()).
+        # N'affecte QUE Φ (r_store) : les features d'obs (timing_*) et le crédit SoC de bord
+        # (_rescore → _store_value) restent sur le forecast, pour que le scoring reste
+        # bit-comparable avec exp21b/exp23/exp25. PBRS invariant quel que soit Φ ⇒ l'optimum
+        # et la comparaison RL↔MILP ne bougent pas.
+        self._store_value_mode = config["reward"].get("store_value_mode", "horizon_max")
+        if self._store_value_mode not in ("horizon_max", "milp_dual"):
+            raise ValueError(
+                f"Unknown reward.store_value_mode={self._store_value_mode!r}; "
+                "use 'horizon_max' or 'milp_dual'."
+            )
+        self._store_value_series: np.ndarray | None = None  # λ(t) €/kWh, longueur max_steps+1
 
         # Pénalité one-sided sur l'export DE STOCK (coût d'opportunité prix-aware). 0.0 = inactif
         # (opt-in, runs existants bit-identiques). Zéro sur l'optimum ⇒ ne déplace pas l'optimum
         # (même philosophie que spread_penalty). Décourage de vendre le stock quand le garder
         # éviterait un import futur plus cher (cf. _export_opportunity_cost).
         self._sigma_export_stock = config["reward"].get("sigma_export_stock", 0.0)
+
+        # Miroir EXPORT-side de sigma_export_stock : pénalise l'export DE STOCK maintenant quand un
+        # prix d'export PLUS ÉLEVÉ arrive dans l'horizon (coût d'opportunité de « vendre trop tôt »,
+        # cf. _export_hold_cost). 0.0 = inactif (opt-in, runs existants bit-identiques). Cible le
+        # biais « déployer trop tôt » (exp23/exp27 : le RL vide la batterie AVANT le pic export du
+        # soir ~21h à 0.442 → rate l'arbitrage export>import que fait le MILP). λ(t) du milp_dual
+        # étant quasi-plat (~0.24 « refill », il ne distingue pas le pic) le PBRS seul ne suffit
+        # pas ⇒ ce terme injecte le gradient temporel manquant. ~Zéro sur l'optimum (export optimal
+        # au pic ⇒ oc_hold≈0), petit résidu sur la rampe rate-limitée ⇒ prior doux (swept, arm 0).
+        self._sigma_hold_export = config["reward"].get("sigma_hold_export", 0.0)
+
+        # Miroir CHARGE-side de sigma_hold_export (exp29) : pénalise la CHARGE maintenant quand un
+        # prix d'export plus BAS arrive dans l'horizon sur un pas où la charge est FAISABLE
+        # (surplus PV > 0 — la batterie ne charge que du PV, cf. contrainte EDF). Charger coûte
+        # l'export sacrifié : oc_charge = max(0, p_exp_now − min faisable futur), cf.
+        # _charge_hold_cost. Cible le biais « charger trop tôt » (audit exp28 run_008 : 75 % du
+        # gap résiduel hiver = charge démarrée à 11h/0.201 et étalée à puissance partielle, au
+        # lieu de concentrée à −100 kW dans la fenêtre 0.181-0.191 comme le MILP). ~Zéro sur
+        # l'optimum (le MILP charge aux pas d'export min faisables), petit résidu quand la
+        # fenêtre min n'a pas assez de surplus (hiver : ~30 kWh chargés à 0.201) ⇒ prior DOUX
+        # comme sigma_hold_export (swept, arm 0). 0.0 = inactif (runs existants bit-identiques).
+        self._sigma_charge_hold = config["reward"].get("sigma_charge_hold", 0.0)
 
         price_forecast_dim = self.horizon_steps if self.price_signal.has_forecast else 0
         load_forecast_dim = self.horizon_steps if self._load_forecast_in_obs else 0
@@ -103,9 +152,12 @@ class MicrogridEnv(gym.Env):
             else 0
         )
         timing_dim = 1 if (self._timing_feat and self.price_signal.has_forecast) else 0
+        timing_v2_dim = 4 if (self._timing_feats_v2 and self.price_signal.has_forecast) else 0
+        timing_v3_dim = 2 if (self._timing_feats_v3 and self.price_signal.has_forecast) else 0
         obs_dim = (
             9 + self.horizon_steps + load_forecast_dim
-            + price_forecast_dim + export_forecast_dim + timing_dim
+            + price_forecast_dim + export_forecast_dim + timing_dim + timing_v2_dim
+            + timing_v3_dim
         )
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
@@ -149,11 +201,64 @@ class MicrogridEnv(gym.Env):
             parts.append(np.array(
                 [self._store_value(self.step_index) - max(p_imp, p_exp)], dtype=np.float32
             ))
+        if self._timing_feats_v2 and self.price_signal.has_forecast:
+            # 4 signaux de timing découplés (import/export séparés + QUAND) :
+            #   1. steps_to_argmax_export / horizon ∈ [0,1[ — délai jusqu'au meilleur moment
+            #      d'export (0 = c'est maintenant → « vends »), le v1 ne donnait pas le QUAND ;
+            #   2. max export futur − p_exp maintenant ≥ 0 — gain d'attente côté export ;
+            #   3. max import futur − p_imp maintenant ≥ 0 — gain d'attente côté import évité ;
+            #   4. p_exp maintenant − moyenne export future — « bosse locale » : >0 si l'instant
+            #      courant est localement cher (bosse matinale 9h : vendre le PV direct),
+            #      <0 dans les creux (charger). Distingue les 2 bosses de la grille CoutsProd.
+            imp_fc = self.price_signal.get_import_forecast(self.step_index, self.horizon_steps)
+            exp_fc = self.price_signal.get_export_forecast(self.step_index, self.horizon_steps)
+            parts.append(np.array(
+                [
+                    float(np.argmax(exp_fc)) / self.horizon_steps,
+                    float(exp_fc.max()) - p_exp,
+                    float(imp_fc.max()) - p_imp,
+                    p_exp - float(exp_fc.mean()),
+                ],
+                dtype=np.float32,
+            ))
+        if self._timing_feats_v3 and self.price_signal.has_forecast:
+            # 2 signaux de timing CHARGE-side (v2 est orienté export-max, cf. __init__) :
+            #   1. steps_to_argmin_export_faisable / horizon ∈ [0,1[ — délai jusqu'au moment le
+            #      moins cher pour charger (0 = c'est maintenant → « charge ») ;
+            #   2. p_exp maintenant − min faisable — gain d'attente côté charge : ≥ 0 quand la
+            #      charge est faisable maintenant (grand → attendre la fenêtre pas chère), peut
+            #      être < 0 quand elle ne l'est pas (export courant sous le min faisable — inerte,
+            #      la charge est impossible). (0, 0) si aucun pas faisable ; inerte prix fixes.
+            found = self._feasible_charge_export_min(self.step_index)
+            if found is None:
+                parts.append(np.zeros(2, dtype=np.float32))
+            else:
+                parts.append(np.array(
+                    [
+                        float(found[0]) / self.horizon_steps,
+                        p_exp - found[1],
+                    ],
+                    dtype=np.float32,
+                ))
 
         return np.concatenate(parts)
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
+        # λ(t) du mode milp_dual : calcul paresseux au premier reset (PAS dans __init__ — le
+        # solve MIP+LP prend quelques secondes et tous les chemins de construction d'env
+        # (make_env, make_env_overfit, replay) passent par reset). Import local : baselines
+        # n'importe pas envs ⇒ pas de cycle.
+        if (self._store_shaping and self._store_value_mode == "milp_dual"
+                and self._store_value_series is None):
+            from baselines.milp_solver import milp_soc_duals
+            lam = np.asarray(milp_soc_duals(self, self.cfg), dtype=np.float64)
+            assert lam.shape[0] >= self.max_steps + 1, (
+                f"milp_soc_duals: {lam.shape[0]} valeurs < max_steps+1 = {self.max_steps + 1}"
+            )
+            self._store_value_series = lam
+            print(f"[store_value_mode=milp_dual] λ(t) calculé : "
+                  f"min={lam.min():.4f} max={lam.max():.4f} €/kWh ({lam.shape[0]} pas)")
         self.step_index = 0
         if self._random_soc:
             eps = 0.05
@@ -191,6 +296,17 @@ class MicrogridEnv(gym.Env):
         exp_fc = self.price_signal.get_export_forecast(idx, self.horizon_steps)
         return max(float(imp_fc.max()), float(exp_fc.max()))
 
+    def _phi_value(self, idx: int) -> float:
+        """Valeur v(t) utilisée par le potentiel PBRS Φ = σ·v(t)·E_util (et lui SEUL).
+
+        milp_dual : λ(idx) exact (€/kWh) précalculé au reset ; sinon repli sur l'heuristique
+        ``_store_value`` (max forecast). Les obs et le crédit de bord restent sur
+        ``_store_value`` — cf. commentaire de ``_store_value_mode`` dans __init__.
+        """
+        if self._store_value_series is not None:
+            return float(self._store_value_series[idx])
+        return self._store_value(idx)
+
     def _export_opportunity_cost(self, idx: int) -> float:
         """Coût d'opportunité (€/kWh) d'exporter le stock à l'instant ``idx`` au lieu de le
         garder pour éviter un import futur :  ``oc = max(0, v_imp_future − price_exp_now)``.
@@ -213,6 +329,79 @@ class MicrogridEnv(gym.Env):
         else:
             v_imp = float(self.price_signal.get_import_forecast(idx, self.horizon_steps).max())
         return max(0.0, v_imp - price_exp_now)
+
+    def _export_hold_cost(self, idx: int) -> float:
+        """Coût d'opportunité (€/kWh) d'exporter le stock MAINTENANT au lieu d'attendre un meilleur
+        prix d'export dans l'horizon :  ``oc = max(0, max(export_forecast) − price_exp_now)``.
+
+        Miroir EXPORT-side de ``_export_opportunity_cost`` (qui, lui, compare à l'IMPORT futur
+        évitable). Ici on compare l'EXPORT futur : « ne vends pas ton stock maintenant si le pic
+        export du soir paie plus ». Numériquement identique à la feature timing_v2 #2, mais
+        réutilisée ici comme coût d'opportunité pénalisant (et non comme simple input d'obs).
+
+        PAS de facteur rendement : ``eta_d`` s'applique identiquement à « exporter maintenant » et
+        « exporter plus tard » ⇒ se simplifie (même raison que ``_export_opportunity_cost``).
+
+        ~ZÉRO sur l'optimum : l'export optimal a lieu AU pic (``max_future ≤ price_exp_now`` ⇒
+        ``oc = 0``) ; petit résidu positif seulement sur la rampe rate-limitée juste avant le pic.
+        C'est donc un prior DOUX, pas un invariant strict (contrairement à
+        ``_export_opportunity_cost``) ⇒ à balayer (arm σ_hold=0) et juger sur le net_cost réel.
+        Repli 0 sans forecast (pas de pic futur connu ⇒ aucun coût d'opportunité).
+        """
+        if not self.price_signal.has_forecast:
+            return 0.0
+        price_exp_now = self.price_signal.get_export_price(idx)
+        v_exp = float(self.price_signal.get_export_forecast(idx, self.horizon_steps).max())
+        return max(0.0, v_exp - price_exp_now)
+
+    def _feasible_charge_export_min(self, idx: int) -> tuple[int, float] | None:
+        """(argmin, min) du prix d'export sur les pas de l'horizon où la CHARGE est faisable.
+
+        Charger coûte l'export sacrifié au prix du pas ⇒ le meilleur moment pour charger est le
+        pas au prix d'export MINIMAL parmi ceux où la batterie peut effectivement charger :
+        surplus PV > 0 en mode ``surplus`` (pv_fc − load_fc), PV > 0 en mode ``total``. Sans ce
+        masque, le min serait la nuit (export plancher) où la charge est physiquement impossible.
+        Retourne None si aucun pas faisable dans l'horizon ou sans forecast prix. L'élément 0 des
+        forecasts = maintenant : si la charge est faisable maintenant, min ≤ p_exp_now garanti.
+        """
+        if not self.price_signal.has_forecast:
+            return None
+        pv_fc = self.pv.get_forecast(idx, self.horizon_steps)
+        if self._pv_charge_mode == "total":
+            feasible = pv_fc > 0.0
+        else:
+            feasible = (pv_fc - self.load.get_forecast(idx, self.horizon_steps)) > 0.0
+        if not feasible.any():
+            return None
+        exp_fc = self.price_signal.get_export_forecast(idx, self.horizon_steps)
+        masked = np.where(feasible, exp_fc, np.inf)
+        argmin = int(np.argmin(masked))
+        return argmin, float(masked[argmin])
+
+    def _charge_hold_cost(self, idx: int) -> float:
+        """Coût d'opportunité (€/kWh) de charger MAINTENANT au lieu d'attendre un pas faisable au
+        prix d'export plus bas :  ``oc = max(0, price_exp_now − min faisable(export_forecast))``.
+
+        Miroir CHARGE-side de ``_export_hold_cost`` : là-bas « ne vends pas ton stock avant le pic
+        export », ici « ne sacrifie pas de l'export cher pour charger quand une fenêtre d'export
+        moins chère (donc une charge moins coûteuse) arrive plus tard ». Le min est restreint aux
+        pas où la charge est FAISABLE (cf. ``_feasible_charge_export_min``).
+
+        PAS de facteur rendement : ``eta_c`` s'applique identiquement à « charger maintenant » et
+        « charger plus tard » ⇒ se simplifie (même raison que les deux autres termes miroirs).
+
+        ~ZÉRO sur l'optimum : le MILP charge aux pas d'export min faisables (``min ≥ p_exp_now``
+        sur ces pas ⇒ ``oc = 0``) ; résidu positif quand la fenêtre min n'a pas assez de surplus
+        PV pour tout charger (le MILP déborde sur des pas plus chers) ou via le chevauchement 24h
+        avec la fenêtre bon marché du LENDEMAIN. Prior DOUX, pas invariant strict ⇒ à balayer
+        (arm σ_charge=0) et juger sur le net_cost réel. Repli 0 sans forecast / sans pas faisable
+        (charge impossible de toute façon ⇒ aucun coût d'opportunité).
+        """
+        found = self._feasible_charge_export_min(idx)
+        if found is None:
+            return 0.0
+        price_exp_now = self.price_signal.get_export_price(idx)
+        return max(0.0, price_exp_now - found[1])
 
     def step(self, action):
         # Lues AVANT le calcul de Pb_command : la contrainte EDF ci-dessous borne la charge
@@ -294,8 +483,8 @@ class MicrogridEnv(gym.Env):
         if self._store_shaping:
             cap = self.battery.capacity_kwh
             floor = self.battery.soc_min
-            phi_t = self._sigma_store * self._store_value(self.step_index) * (soc_old - floor) * cap
-            phi_tp1 = self._sigma_store * self._store_value(self.step_index + 1) * (new_soc - floor) * cap
+            phi_t = self._sigma_store * self._phi_value(self.step_index) * (soc_old - floor) * cap
+            phi_tp1 = self._sigma_store * self._phi_value(self.step_index + 1) * (new_soc - floor) * cap
             r_store = self._gamma_shaping * phi_tp1 - phi_t
 
         # r_export_stock — coût d'opportunité one-sided sur l'export DE STOCK. e_batt_exp =
@@ -312,8 +501,37 @@ class MicrogridEnv(gym.Env):
                 oc = self._export_opportunity_cost(self.step_index)
                 r_export_stock = -self._sigma_export_stock * oc * e_batt_exp_kw * self.delta_t_h
 
+        # r_hold_export — miroir EXPORT-side de r_export_stock : pénalise l'export DE STOCK
+        # maintenant quand un pic export PLUS haut arrive dans l'horizon (oc_hold = max(0,
+        # max(export_fc) − price_exp_now), cf. _export_hold_cost). Cible le biais « déployer trop
+        # tôt » (le RL vide avant le pic 0.442 du soir → rate l'arbitrage export>import du MILP,
+        # que le λ(t) quasi-plat du milp_dual ne pénalise pas). Même e_batt_exp que r_export_stock
+        # (export issu de la décharge batterie, pas du surplus PV). ~Zéro sur l'optimum (prior doux).
+        r_hold_export = 0.0
+        if self._sigma_hold_export > 0.0:
+            pv_surplus = max(0.0, pv_t - load_t)
+            e_batt_exp_kw = max(0.0, max(-P_grid, 0.0) - pv_surplus)
+            if e_batt_exp_kw > 0.0:
+                oc_hold = self._export_hold_cost(self.step_index)
+                r_hold_export = -self._sigma_hold_export * oc_hold * e_batt_exp_kw * self.delta_t_h
+
+        # r_charge_hold — miroir CHARGE-side de r_hold_export : pénalise la CHARGE maintenant
+        # quand une fenêtre d'export plus basse (= charge moins coûteuse) arrive dans l'horizon
+        # sur un pas faisable (oc_charge = max(0, price_exp_now − min faisable(export_fc)), cf.
+        # _charge_hold_cost). Cible le biais « charger trop tôt » (audit exp28 : le RL charge dès
+        # 11h/0.201 à puissance partielle et rate la fenêtre 0.181-0.191 concentrée du MILP, puis
+        # exporte son surplus au pire prix). e_charge = charge effective (déjà ≤ surplus PV via la
+        # contrainte EDF ci-dessus). ~Zéro sur l'optimum (prior doux, cf. _charge_hold_cost).
+        r_charge_hold = 0.0
+        if self._sigma_charge_hold > 0.0:
+            e_charge_kw = max(0.0, -Pb_effective)
+            if e_charge_kw > 0.0:
+                oc_charge = self._charge_hold_cost(self.step_index)
+                r_charge_hold = -self._sigma_charge_hold * oc_charge * e_charge_kw * self.delta_t_h
+
         # reward = r_eco + r_soc + r_curt + r_bat_power + r_spread
-        reward = r_eco + r_soc + r_curt +  r_spread + r_phantom + r_store + r_export_stock
+        reward = (r_eco + r_soc + r_curt + r_spread + r_phantom + r_store
+                  + r_export_stock + r_hold_export + r_charge_hold)
 
         # reward = r_eco + r_soc + r_curt
 
@@ -343,6 +561,8 @@ class MicrogridEnv(gym.Env):
                     "r_phantom": float(r_phantom),
                     "r_store":   float(r_store),
                     "r_export_stock": float(r_export_stock),
+                    "r_hold_export": float(r_hold_export),
+                    "r_charge_hold": float(r_charge_hold),
                     "reward":    float(reward),
                     "pcurt":     float(Pcurt),
                     "pph":       float(P_phantom),
@@ -371,6 +591,8 @@ class MicrogridEnv(gym.Env):
             "r_phantom": r_phantom,
             "r_store": r_store,
             "r_export_stock": r_export_stock,
+            "r_hold_export": r_hold_export,
+            "r_charge_hold": r_charge_hold,
             "P_phantom": P_phantom,
             "Pcurt": Pcurt,
             "pv_t": pv_t,

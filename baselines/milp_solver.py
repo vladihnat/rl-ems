@@ -6,11 +6,20 @@ import cvxpy as cp
 from evaluation.metrics import compute_metrics, metrics_by_season, season_labels
 
 
-def run_milp(env, config: dict) -> dict:
-    """Solve the full-horizon optimal dispatch problem.
+def _build_problem(env, config: dict, fix_b=None, fix_g=None) -> dict:
+    """Construit le problème de dispatch plein-horizon (variables + contraintes + objectif).
 
-    Decision variable: Pb[t] (battery power at each timestep).
-    Objective: minimize total import cost minus export revenue.
+    Factorisation partagée entre ``run_milp`` (solve MIP) et ``milp_soc_duals`` (re-solve LP à
+    binaires figés pour extraire les duals) : UNE seule définition du modèle, pas de dérive.
+
+    Args:
+        fix_b, fix_g: arrays 0/1 de longueur T. Si fournis, les binaires (b = décharge/charge,
+            g_grid = import/export) deviennent des CONSTANTES ⇒ le problème est un pur LP dont
+            les duals sont exploitables. None (défaut) = vraies variables booléennes (MIP).
+
+    Returns:
+        dict avec ``prob`` et toutes les variables, plus ``con_soc_init`` / ``con_soc_dyn``
+        (contraintes de dynamique SoC, dans l'ordre t=0..T-1) pour l'extraction des duals.
     """
     cfg = config
     delta_t_h = cfg["time"]["delta_t_min"] / 60.0
@@ -43,7 +52,8 @@ def run_milp(env, config: dict) -> dict:
     # le solveur « pompe » un spread fictif en achetant ET vendant à la borne réseau au même
     # instant : objectif non physique (énergie créée du néant) et dispatch batterie corrompu,
     # rendant la baseline MILP battable par le RL. cf. tests/test_milp_no_money_pump.py.
-    g_grid = cp.Variable(T, boolean=True)
+    g_grid = cp.Constant(np.asarray(fix_g, dtype=np.float64)) if fix_g is not None \
+        else cp.Variable(T, boolean=True)
     Pcurt = cp.Variable(T, nonneg=True)  # curtailment PV explicite
     # Puissance fantôme (slack à la Duchaud-JL, cf. @EmsLinprog Pph) : production
     # « sortie du néant » ≥ 0, sans borne supérieure, fortement pénalisée. Permet de
@@ -53,7 +63,8 @@ def run_milp(env, config: dict) -> dict:
 
     constraints = []
 
-    constraints.append(soc[0] == init_soc)
+    con_soc_init = soc[0] == init_soc
+    constraints.append(con_soc_init)
 
     for t in range(T):
         # bilan corrigé : Pp_used = pv - Pcurt ; la puissance fantôme s'ajoute à l'offre
@@ -67,13 +78,8 @@ def run_milp(env, config: dict) -> dict:
     # g=0 ⇒ P_imp=0 (export ≤ max_exp). Remplace les bornes simples pour tuer le money-pump.
     # Non-contraignant quand price_exp ≤ price_imp (toute basse saison / heures creuses) :
     # l'optimum LP y a déjà P_imp·P_exp=0 ⇒ résultats inchangés sur ces régimes.
-    #Decomente ligne 46 pour que cela marche et commente lignes 75 et 76
     constraints.append(P_imp <= max_imp * g_grid)
     constraints.append(P_exp <= max_exp * (1 - g_grid))
-
-    # Contraintes ancienne sans complementarité 
-    # constraints.append(P_imp <= max_imp)
-    # constraints.append(P_exp <= max_exp )
 
     # SoC dynamics: linearised (charge/discharge handled via single efficiency approximation)
     # For the MILP we use a simplified model:
@@ -82,7 +88,8 @@ def run_milp(env, config: dict) -> dict:
     # Since this makes the problem nonlinear, we introduce auxiliary variables.
     Pb_charge = cp.Variable(T, nonneg=True)  # magnitude of charging
     Pb_discharge = cp.Variable(T, nonneg=True)  # magnitude of discharging
-    b = cp.Variable(T, boolean=True)  # b[t]=1 → discharge, b[t]=0 → charge
+    b = cp.Constant(np.asarray(fix_b, dtype=np.float64)) if fix_b is not None \
+        else cp.Variable(T, boolean=True)  # b[t]=1 → discharge, b[t]=0 → charge
 
     constraints.append(Pb == Pb_discharge - Pb_charge)
 
@@ -108,9 +115,11 @@ def run_milp(env, config: dict) -> dict:
             f"Unknown battery.pv_charge_mode={pv_charge_mode!r}; use 'surplus' or 'total'."
         )
 
+    con_soc_dyn = []
     for t in range(T):
         soc_change = (Pb_charge[t] * eta_c - Pb_discharge[t] / eta_d) * delta_t_h / capacity
-        constraints.append(soc[t + 1] == soc[t] + soc_change)
+        con_soc_dyn.append(soc[t + 1] == soc[t] + soc_change)
+    constraints.extend(con_soc_dyn)
 
     constraints.append(soc >= soc_min)
     constraints.append(soc <= soc_max)
@@ -144,20 +153,60 @@ def run_milp(env, config: dict) -> dict:
     )
 
     prob = cp.Problem(objective, constraints)
-    # Déterminisme du solveur : HiGHS multithread renvoie un sommet arbitraire de la face
-    # optimale dégénérée à chaque solve → le tracé MILP « clignote » d'un run à l'autre, même
-    # avec le tie-break (la dégénérescence sur les binaires b/g_grid n'est pas figée par un ε
-    # sur les flux continus). parallel="off" + random_seed fixe ⇒ HiGHS est une fonction
-    # déterministe de l'entrée (même résultat à chaque run). Quand le tie-break est actif, on
-    # ferme le gap MIP à 0 pour que l'optimum unique du tilt soit réellement atteint.
+
+    return {
+        "prob": prob, "T": T, "delta_t_h": delta_t_h,
+        "pv_vals": pv_vals, "load_vals": load_vals,
+        "price_imp": price_imp, "price_exp": price_exp,
+        "phantom_penalty": phantom_penalty, "tie_eps": tie_eps, "milp_cfg": milp_cfg,
+        "Pb": Pb, "Pg": Pg, "P_imp": P_imp, "P_exp": P_exp, "g_grid": g_grid,
+        "Pcurt": Pcurt, "P_phantom": P_phantom, "soc": soc,
+        "Pb_charge": Pb_charge, "Pb_discharge": Pb_discharge, "b": b,
+        "con_soc_init": con_soc_init, "con_soc_dyn": con_soc_dyn,
+        "soc_min": soc_min, "soc_max": soc_max, "capacity": capacity,
+    }
+
+
+def _solve(built: dict) -> None:
+    """Résout le problème construit par ``_build_problem`` (options HiGHS partagées).
+
+    Déterminisme du solveur : HiGHS multithread renvoie un sommet arbitraire de la face
+    optimale dégénérée à chaque solve → le tracé MILP « clignote » d'un run à l'autre, même
+    avec le tie-break (la dégénérescence sur les binaires b/g_grid n'est pas figée par un ε
+    sur les flux continus). parallel="off" + random_seed fixe ⇒ HiGHS est une fonction
+    déterministe de l'entrée (même résultat à chaque run). Quand le tie-break est actif, on
+    ferme le gap MIP à 0 pour que l'optimum unique du tilt soit réellement atteint.
+    """
+    prob = built["prob"]
     solver_options = {"parallel": "off", "random_seed": 0}
-    if tie_eps > 0.0:
+    if built["tie_eps"] > 0.0:
         solver_options.update(mip_rel_gap=0.0, mip_abs_gap=0.0)
-    solver_options.update(milp_cfg.get("solver_options", {}))  # override explicite gagne
+    solver_options.update(built["milp_cfg"].get("solver_options", {}))  # override explicite gagne
     prob.solve(solver=cp.HIGHS, verbose=False, **solver_options)
 
     if prob.status not in ("optimal", "optimal_inaccurate"):
         raise RuntimeError(f"MILP solver failed: {prob.status}")
+
+
+def run_milp(env, config: dict) -> dict:
+    """Solve the full-horizon optimal dispatch problem.
+
+    Decision variable: Pb[t] (battery power at each timestep).
+    Objective: minimize total import cost minus export revenue.
+    """
+    built = _build_problem(env, config)
+    _solve(built)
+
+    T = built["T"]
+    delta_t_h = built["delta_t_h"]
+    pv_vals, load_vals = built["pv_vals"], built["load_vals"]
+    price_imp, price_exp = built["price_imp"], built["price_exp"]
+    phantom_penalty = built["phantom_penalty"]
+    soc_min, soc_max = built["soc_min"], built["soc_max"]
+    prob = built["prob"]
+    Pb, Pg, soc = built["Pb"], built["Pg"], built["soc"]
+    Pb_charge, Pb_discharge, b = built["Pb_charge"], built["Pb_discharge"], built["b"]
+    Pcurt, P_phantom = built["Pcurt"], built["P_phantom"]
 
     Pb_sol = Pb.value
     Pg_sol = Pg.value
@@ -205,3 +254,57 @@ def run_milp(env, config: dict) -> dict:
     metrics["solver_status"] = prob.status
     metrics["objective_value"] = prob.value
     return metrics
+
+
+def milp_soc_duals(env, config: dict) -> np.ndarray:
+    """Valeur marginale exacte du stock λ(t) en €/kWh, longueur T+1 (t = 0..T).
+
+    Pour le potentiel PBRS ``reward.store_value_mode: "milp_dual"`` (exp26) : remplace
+    l'heuristique ``v(t) = max forecast`` (qui survalorise le stock — elle ignore la limite de
+    puissance et la saturation, et ne décroît pas après le pic) par le prix fantôme du kWh
+    stocké issu du problème d'optimisation lui-même. PBRS reste invariant quel que soit Φ ⇒
+    n'altère ni l'optimum ni la comparaison RL↔MILP ; λ(t) ne fait qu'accélérer le credit
+    assignment (le pic du soir est à ~84 pas de t0, cf. audit exp23).
+
+    Méthode (2 solves) :
+      1. solve MIP plein-horizon (même modèle que ``run_milp`` via ``_build_problem``) ;
+      2. re-solve en LP avec les binaires b / g_grid FIGÉS à l'optimum ⇒ duals exploitables ;
+         λ(t) = dual de la contrainte qui « produit » soc[t] : init pour t=0, dynamique t−1
+         pour t ≥ 1. Duals en €/(fraction de SoC) → ÷ capacité pour des €/kWh.
+
+    Signe : CVXPY (minimisation) donne un dual ≥ 0 quand ajouter du stock RÉDUIT le coût.
+    Les λ peuvent être légèrement négatifs aux pas où la batterie sature (soc_max atteint :
+    du stock en plus forcerait du curtailment) — on les garde tels quels, c'est la vraie
+    valeur marginale locale.
+    """
+    built = _build_problem(env, config)
+    _solve(built)
+
+    b_opt = np.round(np.asarray(built["b"].value, dtype=np.float64))
+    g_opt = np.round(np.asarray(built["g_grid"].value, dtype=np.float64))
+
+    lp = _build_problem(env, config, fix_b=b_opt, fix_g=g_opt)
+    _solve(lp)
+
+    # Garde-fou : figer les binaires à leur optimum ne doit pas changer l'objectif
+    # (sinon l'arrondi a cassé la faisabilité et les duals ne valent rien).
+    if not np.isclose(lp["prob"].value, built["prob"].value, rtol=1e-6, atol=1e-6):
+        raise RuntimeError(
+            f"milp_soc_duals: objectif LP ({lp['prob'].value:.6f}) ≠ MIP "
+            f"({built['prob'].value:.6f}) après fixation des binaires."
+        )
+
+    duals = np.empty(lp["T"] + 1, dtype=np.float64)
+    duals[0] = float(np.asarray(lp["con_soc_init"].dual_value))
+    for t, con in enumerate(lp["con_soc_dyn"]):
+        duals[t + 1] = float(np.asarray(con.dual_value))
+
+    # Signe vérifié empiriquement (exp23 hiver, CVXPY 1.x/HiGHS) : le dual d'égalité est
+    # DIRECTEMENT la valeur marginale du stock (≥ 0), sous forme de co-état constant par
+    # morceaux qui saute quand le SoC touche une borne — p.ex. λ(fin) = coût de remplacement
+    # 0.216/η_c = 0.24 €/kWh. Garde-fou : si une future version de CVXPY inverse la
+    # convention du dual d'égalité, on réaligne sur « valeur du stock ≥ 0 en médiane ».
+    lam = duals / float(lp["capacity"])
+    if np.median(lam) < 0.0:
+        lam = -lam
+    return lam

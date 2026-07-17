@@ -30,6 +30,7 @@ configs/sweeps/
 
 rl_amelioration.md
 plan_actions.md 
+scripts/fig/
 
 # --- Python bytecode / caches ---
 __pycache__/

@@ -1,0 +1,90 @@
+# exp29 — Arbitrage charge-timing (Phase E de l'audit exp23→exp28). exp28 (r_hold_export, best
+# hiver run_008 = 2.63 % à σ_hold=0.5/σ_store=1.0) a réglé le soir : plus de dump t0, le stock
+# tient jusqu'à 19h. Décomposition horaire du résiduel (+4.95 €/3 j run_008 vs MILP) :
+#   - MATIN/MIDI +3.75 € (~75 %) = biais « CHARGER trop tôt » : le RL charge dès 11h (export
+#     0.201 sacrifié) à puissance partielle, au lieu de concentrer à −100 kW dans la fenêtre
+#     d'export min (0.181-0.191, 12-15h) comme le MILP ; plein trop tôt, il exporte ensuite son
+#     surplus au pire prix (0.180). Même signature confirmée en été (charge grignotée 8h-13h45 à
+#     0.166-0.189 vs MILP concentré 14h-15h45 à 0.164).
+#   - SOIR +1.20 € (~25 %) = pauses manquantes (le MILP importe 2 pas à 0.2475 pour tenir le
+#     stock jusqu'à 21h45/0.442) — NON traité ici (interaction risquée avec g_grid).
+# FIX = reward.sigma_charge_hold : miroir CHARGE-side de sigma_hold_export. Pénalise la charge
+# quand un pas FAISABLE (surplus PV > 0, masque via forecasts PV/load) à l'export plus bas arrive
+# dans l'horizon (oc_charge = max(0, p_exp_now − min faisable(export_fc)), cf.
+# base_microgrid_env._charge_hold_cost). + observation.timing_features_v3 (2 scalaires : QUAND
+# charger au moins cher + gain d'attente) — v2 est orienté export-max et n'a pas ce signal.
+# Prior DOUX comme σ_hold (résidu quand la fenêtre min manque de surplus) ⇒ arm σ_charge=0 =
+# contrôle exp28, gap jugé sur le net_cost RÉEL vs MILP inchangé (shaping train-only).
+# Base = exp28 hiver (mêmes données 4j / prix step_hp_hc / overfit / pin surplus / milp_dual /
+# γ=0.999 / timing_v2), σ_hold_export=0.5 et σ_store=1.0 épinglés (bras gagnant, stable 3 seeds).
+# Axes (generate_sweep.py) : timing_features_v3 ∈ {false,true} × sigma_charge_hold ∈ {0.0, 0.5, 1.0} × 3 seeds.
+battery:
+  pv_charge_mode: surplus   # pin comparabilite exp25..exp28 (defaut code = total)
+  capacity_kwh: 400.0
+  efficiency_charge: 0.9
+  efficiency_discharge: 0.9
+  init_soc: 0.5
+  max_charge_kw: 100.0
+  max_discharge_kw: 100.0
+  soc_max: 0.9
+  soc_min: 0.2
+data:
+  load_column: Conso_tot
+  load_csv: data/load_simu_hiver_haute_4d.csv
+  pv_column: Global30_kW
+  pv_csv: data/irradiance_simu_hiver_haute_4d.csv
+experiment:
+  name: exp29_hiver_haute
+  seed: 40
+grid:
+  curtailment: clip
+  hc_midday: true
+  max_export_kw: 500.0
+  max_import_kw: 500.0
+  price_hc: 0.1895
+  price_hp: 0.2475
+  price_type: step_hp_hc
+load:
+  base_load_kw: 1.0
+  type: real
+observation:
+  load_forecast: true
+  price_export_forecast: true
+  timing_feature: false
+  timing_features_v2: true   # timing_mode=v2 (meilleur exp25, épinglé depuis exp27)
+  timing_features_v3: false  # levier exp29 (obs charge-side) — surchargé par le sweep {false,true}
+pv:
+  eta_ref: 0.2
+  surface_m2: 1600.0
+  type: perfect
+reward:
+  sigma_charge_hold: 0.0     # levier exp29 (miroir charge) — surchargé par le sweep {0.0,0.5,1.0}
+  sigma_export_stock: 0.0
+  sigma_hold_export: 0.5     # meilleur exp28 (bras stable 3.00/2.63/3.48 sur 3 seeds)
+  sigma_soc: 10.0
+  sigma_store: 1.0           # meilleur exp28 (σ=1.5 dégrade TOUS les bras : seuil σ·λ trop haut)
+  soc_safe_max: 0.9
+  soc_safe_min: 0.2
+  spread_penalty: true
+  store_value: true
+  store_value_mode: milp_dual
+time:
+  delta_t_min: 15
+  horizon_h: 24
+training:
+  algorithm: SAC
+  batch_size: 256
+  buffer_size: 750000
+  ent_coef: auto
+  eval_on_train: true
+  gamma: 0.999   # levier dominant exp25 (0.999^84 ≈ 0.92 : le pic du soir reste visible de t0)
+  learning_rate: 0.0003
+  learning_starts: 10000
+  norm_obs: true
+  norm_reward: false
+  random_soc: false
+  score_days: 2
+  split_method: temporal
+  total_timesteps: 500000
+  train_split: 1.0
+  val_split: 0.0

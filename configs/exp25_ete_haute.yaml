@@ -1,0 +1,75 @@
+# exp25 — credit assignment long-horizon (audit exp23) : le gap résiduel vient d'un biais
+# « déployer trop tôt » (dump t0 quasi-dégénéré ~3 €, décharge du soir ~1h avant le pic 21-22h,
+# charge au mauvais créneau), pas d'une erreur de modèle. Trois axes (via generate_sweep.py) :
+#   - gamma ∈ {0.99, 0.999}      : 0.999^84 ≈ 0.92 — le pic du soir reste visible depuis t0 ;
+#   - timing_mode ∈ {v1, v2}     : gap agrégé (exp23) vs 4 scalaires découplés (QUAND + gaps
+#                                  imp/exp + bosse locale — distingue les 2 bosses CoutsProd) ;
+#   - sigma_store ∈ {0.0, 0.3}   : exp23 montre que 1.0/2.0 dégradent l'hiver (shaping ≫ r_eco).
+# Base = exp23 (mêmes données 4j, mêmes prix step_hp_hc + CoutsProd, overfit train==eval,
+# score_days 2). pv_charge_mode épinglé surplus pour comparabilité directe exp21b/exp23.
+battery:
+  pv_charge_mode: surplus   # pin comparabilite exp21b/exp23 (defaut code = total)
+  capacity_kwh: 400.0
+  efficiency_charge: 0.9
+  efficiency_discharge: 0.9
+  init_soc: 0.5
+  max_charge_kw: 100.0
+  max_discharge_kw: 100.0
+  soc_max: 0.9
+  soc_min: 0.2
+data:
+  load_column: Conso_tot
+  load_csv: data/load_simu_ete_haute_4d.csv
+  pv_column: Global30_kW
+  pv_csv: data/irradiance_simu_ete_haute_4d.csv
+experiment:
+  name: exp25_ete_haute
+  seed: 40
+grid:
+  curtailment: clip
+  hc_midday: true
+  max_export_kw: 500.0
+  max_import_kw: 500.0
+  price_hc: 0.1895
+  price_hp: 0.2475
+  price_type: step_hp_hc
+load:
+  base_load_kw: 1.0
+  type: real
+observation:
+  load_forecast: true
+  price_export_forecast: true
+  timing_feature: false
+  timing_features_v2: false
+pv:
+  eta_ref: 0.2
+  surface_m2: 1600.0
+  type: perfect
+reward:
+  sigma_export_stock: 0.0
+  sigma_soc: 10.0
+  sigma_store: 0.3
+  soc_safe_max: 0.9
+  soc_safe_min: 0.2
+  spread_penalty: true
+  store_value: true
+time:
+  delta_t_min: 15
+  horizon_h: 24
+training:
+  algorithm: SAC
+  batch_size: 256
+  buffer_size: 750000
+  ent_coef: auto
+  eval_on_train: true
+  gamma: 0.99
+  learning_rate: 0.0003
+  learning_starts: 10000
+  norm_obs: true
+  norm_reward: false
+  random_soc: false
+  score_days: 2
+  split_method: temporal
+  total_timesteps: 500000
+  train_split: 1.0
+  val_split: 0.0

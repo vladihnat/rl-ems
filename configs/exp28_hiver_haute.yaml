@@ -1,0 +1,84 @@
+# exp28 — Arbitrage export-timing (Phase D de l'audit exp23→exp27). exp27 (PBRS milp_dual @
+# γ=0.999 + timing_v2, best hiver run_003 = 3.17 %) laisse un gap résiduel = biais « déployer
+# trop tôt » : le RL vide la batterie AVANT le pic export du soir (~21h à 0.442 €/kWh) alors que
+# le MILP fait des petites pauses (import pour servir la charge) et garde le stock pour vendre au
+# pic (export 0.442 > import HP 0.2475). Cause racine (diagnostic λ(t)) : le dual milp_dual est
+# quasi-PLAT (~0.24 « refill », il ne monte PAS vers le pic) ⇒ σ·λ agit comme un SEUIL d'export
+# plat (σ=1 ⇒ vend dès p_exp>0.24 ~18h) : le PBRS seul ne suffit pas.
+# FIX = reward.sigma_hold_export : miroir EXPORT-side de sigma_export_stock. Pénalise l'export DE
+# STOCK maintenant quand un pic export plus haut arrive dans l'horizon (oc_hold = max(0,
+# max(export_fc) − p_exp_now), cf. base_microgrid_env._export_hold_cost) ⇒ injecte le gradient
+# temporel que λ(t) n'a pas. PAS strictement invariant (petit résidu sur la rampe pré-pic) ⇒ prior
+# DOUX : l'arm sigma_hold_export=0 reproduit exp27, et le gap reste jugé sur le net_cost RÉEL vs
+# le MILP inchangé (shaping = train-only). Base = exp27 hiver (mêmes données 4j / prix step_hp_hc /
+# overfit / pin surplus / milp_dual / γ=0.999 / timing_v2).
+# Axes (generate_sweep.py) : sigma_hold_export ∈ {0.0, 0.5, 1.0} × sigma_store ∈ {1.0, 1.5} × 3 seeds.
+# σ_store balayé BAS (JAMAIS 2.0 : seuil σ·λ ≈ 0.48 > pic 0.442 ⇒ le RL n'exporte plus du tout).
+battery:
+  pv_charge_mode: surplus   # pin comparabilite exp25/exp26/exp27 (defaut code = total)
+  capacity_kwh: 400.0
+  efficiency_charge: 0.9
+  efficiency_discharge: 0.9
+  init_soc: 0.5
+  max_charge_kw: 100.0
+  max_discharge_kw: 100.0
+  soc_max: 0.9
+  soc_min: 0.2
+data:
+  load_column: Conso_tot
+  load_csv: data/load_simu_hiver_haute_4d.csv
+  pv_column: Global30_kW
+  pv_csv: data/irradiance_simu_hiver_haute_4d.csv
+experiment:
+  name: exp28_hiver_haute
+  seed: 40
+grid:
+  curtailment: clip
+  hc_midday: true
+  max_export_kw: 500.0
+  max_import_kw: 500.0
+  price_hc: 0.1895
+  price_hp: 0.2475
+  price_type: step_hp_hc
+load:
+  base_load_kw: 1.0
+  type: real
+observation:
+  load_forecast: true
+  price_export_forecast: true
+  timing_feature: false
+  timing_features_v2: true   # timing_mode=v2 (meilleur exp25)
+pv:
+  eta_ref: 0.2
+  surface_m2: 1600.0
+  type: perfect
+reward:
+  sigma_export_stock: 0.0
+  sigma_hold_export: 0.0     # levier exp28 (miroir export) — surchargé par le sweep {0.0,0.5,1.0}
+  sigma_soc: 10.0
+  sigma_store: 1.0           # meilleur exp27 (run_003) — surchargé par le sweep {1.0,1.5}
+  soc_safe_max: 0.9
+  soc_safe_min: 0.2
+  spread_penalty: true
+  store_value: true
+  store_value_mode: milp_dual
+time:
+  delta_t_min: 15
+  horizon_h: 24
+training:
+  algorithm: SAC
+  batch_size: 256
+  buffer_size: 750000
+  ent_coef: auto
+  eval_on_train: true
+  gamma: 0.999   # levier dominant exp25 (0.999^84 ≈ 0.92 : le pic du soir reste visible de t0)
+  learning_rate: 0.0003
+  learning_starts: 10000
+  norm_obs: true
+  norm_reward: false
+  random_soc: false
+  score_days: 2
+  split_method: temporal
+  total_timesteps: 500000
+  train_split: 1.0
+  val_split: 0.0

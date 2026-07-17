@@ -1,0 +1,84 @@
+# exp29 — Arbitrage charge-timing (Phase E de l'audit exp23→exp28), volet été. Contrairement à
+# exp28 (où l'été n'était qu'un contrôle de non-régression), la signature « CHARGER trop tôt »
+# est CONFIRMÉE en été (replay run_010, +7.96 €/3 j vs MILP) et y est le premier poste (+3.8 €
+# matin) : le RL grignote la charge de 8h à 13h45 (export 0.166-0.189 sacrifié, SoC qui monte en
+# pente douce) pendant que le MILP n'en charge PAS UN kWh (SoC plat, tout exporté) puis concentre
+# la charge à −100 kW dans la fenêtre d'export min 14h-15h45 (0.164). Le solde (+3.0 € soir) =
+# pauses manquantes (non traité ici, cf. exp29_hiver_haute).
+# FIX = reward.sigma_charge_hold (miroir CHARGE-side de sigma_hold_export : oc_charge = max(0,
+# p_exp_now − min faisable(export_fc)), masque surplus PV via forecasts, cf.
+# base_microgrid_env._charge_hold_cost) + observation.timing_features_v3 (QUAND charger au moins
+# cher + gain d'attente). Prior DOUX ⇒ arm σ_charge=0 = contrôle exp28, gap jugé sur net_cost
+# réel vs MILP inchangé (shaping train-only). Base = exp28 été, σ_hold_export=0.5 et σ_store=1.0
+# épinglés (bras 0.78-0.85 % ≈ σ_hold=1.0, aligné sur le pin hiver pour comparabilité).
+# Axes (generate_sweep.py) : timing_features_v3 ∈ {false,true} × sigma_charge_hold ∈ {0.0, 0.5, 1.0} × 3 seeds.
+battery:
+  pv_charge_mode: surplus
+  capacity_kwh: 400.0
+  efficiency_charge: 0.9
+  efficiency_discharge: 0.9
+  init_soc: 0.5
+  max_charge_kw: 100.0
+  max_discharge_kw: 100.0
+  soc_max: 0.9
+  soc_min: 0.2
+data:
+  load_column: Conso_tot
+  load_csv: data/load_simu_ete_haute_4d.csv
+  pv_column: Global30_kW
+  pv_csv: data/irradiance_simu_ete_haute_4d.csv
+experiment:
+  name: exp29_ete_haute
+  seed: 40
+grid:
+  curtailment: clip
+  hc_midday: true
+  max_export_kw: 500.0
+  max_import_kw: 500.0
+  price_hc: 0.1895
+  price_hp: 0.2475
+  price_type: step_hp_hc
+load:
+  base_load_kw: 1.0
+  type: real
+observation:
+  load_forecast: true
+  price_export_forecast: true
+  timing_feature: false
+  timing_features_v2: true   # timing_mode=v2 (meilleur exp25, épinglé depuis exp27)
+  timing_features_v3: false  # levier exp29 (obs charge-side) — surchargé par le sweep {false,true}
+pv:
+  eta_ref: 0.2
+  surface_m2: 1600.0
+  type: perfect
+reward:
+  sigma_charge_hold: 0.0     # levier exp29 (miroir charge) — surchargé par le sweep {0.0,0.5,1.0}
+  sigma_export_stock: 0.0
+  sigma_hold_export: 0.5     # épinglé comme le pin hiver (bras 0.78-0.85 % ≈ σ_hold=1.0 en été)
+  sigma_soc: 10.0
+  sigma_store: 1.0           # meilleur exp28 (σ=1.5 dégrade tous les bras)
+  soc_safe_max: 0.9
+  soc_safe_min: 0.2
+  spread_penalty: true
+  store_value: true
+  store_value_mode: milp_dual
+time:
+  delta_t_min: 15
+  horizon_h: 24
+training:
+  algorithm: SAC
+  batch_size: 256
+  buffer_size: 750000
+  ent_coef: auto
+  eval_on_train: true
+  gamma: 0.999   # levier dominant exp25
+  learning_rate: 0.0003
+  learning_starts: 10000
+  norm_obs: true
+  norm_reward: false
+  random_soc: false
+  score_days: 2
+  split_method: temporal
+  total_timesteps: 500000
+  train_split: 1.0
+  val_split: 0.0

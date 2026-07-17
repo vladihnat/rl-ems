@@ -4,7 +4,7 @@ Python port of the MATLAB `MicroGrid.Monitoring` matrix and `monitoTable`
 dependent property. One row per RL decision step; the row is written
 (indexed) at the moment the agent acts on the env.
 
-Column layout (extended schema, 25 columns):
+Column layout (extended schema, 27 columns):
     SHARED (always populated by RL or MILP rollouts):
         t          unix seconds (float64)
         Pp         PV production [kW], >= 0
@@ -24,7 +24,13 @@ Column layout (extended schema, 25 columns):
         r_export_stock  one-sided opportunity-cost penalty on battery-sourced export
                    = -σ_xs·max(0, max_future_import − price_exp)·e_batt_exp·dt
                    (0 when sigma_export_stock=0; 0 on optimal trajectories)
-        reward     total step reward = r_eco + r_soc + r_curt + r_bat_power + r_spread + r_phantom + r_store + r_export_stock
+        r_hold_export  export-side hold penalty (exp28) on battery-sourced export
+                   = -σ_hold·max(0, max_future_export − price_exp)·e_batt_exp·dt
+                   (0 when sigma_hold_export=0; ~0 on optimal trajectories)
+        r_charge_hold  charge-side hold penalty (exp29) on PV charging
+                   = -σ_charge·max(0, price_exp − min_feasible_future_export)·e_charge·dt
+                   (0 when sigma_charge_hold=0; ~0 on optimal trajectories)
+        reward     total step reward = r_eco + r_soc + r_curt + r_bat_power + r_spread + r_phantom + r_store + r_export_stock + r_hold_export + r_charge_hold
         Pcurt      PV curtailment [kW, >=0] — power shed by inverter when
                    surplus exceeds max_export and battery is saturated
         Pph        phantom power [kW, >=0] — unserved load conjured to close the
@@ -95,6 +101,9 @@ COL_R_PHANTOM    = 22
 COL_R_STORE      = 23
 # One-sided export-stock opportunity-cost penalty (RL-only, 0/NaN otherwise) — appended last.
 COL_R_EXPORT_STOCK = 24
+# Export-side hold penalty (exp28) and charge-side hold penalty (exp29) — RL-only, appended last.
+COL_R_HOLD_EXPORT  = 25
+COL_R_CHARGE_HOLD  = 26
 
 COLUMN_NAMES = [
     "t",
@@ -109,6 +118,8 @@ COLUMN_NAMES = [
     "Pph", "r_phantom",
     "r_store",
     "r_export_stock",
+    "r_hold_export",
+    "r_charge_hold",
 ]
 NUM_COLUMNS = len(COLUMN_NAMES)
 
@@ -137,6 +148,8 @@ _OPTIONAL_KEYS = {
     "r_phantom":    COL_R_PHANTOM,
     "r_store":      COL_R_STORE,
     "r_export_stock": COL_R_EXPORT_STOCK,
+    "r_hold_export": COL_R_HOLD_EXPORT,
+    "r_charge_hold": COL_R_CHARGE_HOLD,
 }
 
 

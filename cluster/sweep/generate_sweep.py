@@ -55,11 +55,26 @@ PARAM_MAP = {
     "score_days":     "training.score_days",
     # Feature d'obs de timing « gap à pic » (optimum-safe, exp23+) :
     "timing_feature": "observation.timing_feature",
+    # Features de timing v2 — 4 scalaires découplés (QUAND + gaps imp/exp + bosse locale, exp25+) :
+    "timing_features_v2": "observation.timing_features_v2",
+    # Axe composite : régler v1/v2 comme UNE variable de sweep (none | v1 | v2 | both).
+    # Traité spécialement dans main() — pose observation.timing_feature ET timing_features_v2.
+    "timing_mode": "__composite__",
+    # PBRS : source de la valeur du stock v(t) — "horizon_max" (défaut) | "milp_dual" (exp26+) :
+    "store_value_mode": "reward.store_value_mode",
     # PBRS — valeur prix-aware du stock / reward shaping (exp19+) :
     "store_value":    "reward.store_value",
     "sigma_store":    "reward.sigma_store",
     # Coût d'opportunité one-sided sur l'export de stock (exp19b+) :
     "sigma_export_stock": "reward.sigma_export_stock",
+    # Miroir EXPORT-side (exp28+) : pénalise l'export de stock avant le pic export de l'horizon
+    # (anti « déployer trop tôt », cf. base_microgrid_env._export_hold_cost) :
+    "sigma_hold_export": "reward.sigma_hold_export",
+    # Miroir CHARGE-side (exp29+) : pénalise la charge avant la fenêtre d'export min faisable de
+    # l'horizon (anti « charger trop tôt », cf. base_microgrid_env._charge_hold_cost) :
+    "sigma_charge_hold": "reward.sigma_charge_hold",
+    # Features de timing v3 — 2 scalaires CHARGE-side (QUAND charger au moins cher, exp29+) :
+    "timing_features_v3": "observation.timing_features_v3",
     # WS-1c — ancre MILP persistante / anti-washout (exp18+) :
     "bc_anchor_demo_buffer":  "training.bc_anchor_demo_buffer",
     "bc_anchor_demo_frac":    "training.bc_anchor_demo_frac",
@@ -177,6 +192,16 @@ def main():
         cfg = yaml.safe_load(yaml.dump(base_cfg))  # deep copy
 
         for param_key, val in override.items():
+            if param_key == "timing_mode":
+                # Axe composite exclusif : une seule valeur pilote les deux flags booléens
+                # (le produit cartésien brut timing_feature × timing_features_v2 générerait
+                # les combinaisons mixtes non voulues).
+                if val not in ("none", "v1", "v2", "both"):
+                    sys.exit(f"[generate_sweep] timing_mode={val!r} invalide "
+                             "(attendu : none | v1 | v2 | both)")
+                _set_nested(cfg, "observation.timing_feature", val in ("v1", "both"))
+                _set_nested(cfg, "observation.timing_features_v2", val in ("v2", "both"))
+                continue
             dot_path = PARAM_MAP[param_key]
             _set_nested(cfg, dot_path, val)
 
