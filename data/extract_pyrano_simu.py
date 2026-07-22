@@ -3,8 +3,8 @@
 Generates two aligned files at the maximum shared timestep (15 min, imposed
 by the inner-join with the load profile):
 
-  --usage train  →  irradiance_training.csv   +  load_training.csv
-  --usage simu   →  irradiance_simulation.csv  +  load_simulation.csv
+  --usage train  →  train/irradiance_training.csv   +  train/load_training.csv
+  --usage simu   →  simu/irradiance_simulation.csv  +  simu/load_simulation.csv
 
 Usage:
     # Single-window mode (backward-compatible)
@@ -46,10 +46,13 @@ SOURCE_CSV = Path(__file__).resolve().parent / "clean/Pyrano1Y_clean.csv"
 LOAD_CSV   = Path(__file__).resolve().parent / "clean/load_profile_interpol.csv"
 # LOAD_CSV   = Path(__file__).resolve().parent / "clean/load_profile_zoh.csv"
 
-TRAIN_IRR_CSV  = Path(__file__).resolve().parent / "irradiance_training.csv"
-TRAIN_LOAD_CSV = Path(__file__).resolve().parent / "load_training.csv"
-SIMU_IRR_CSV   = Path(__file__).resolve().parent / "irradiance_simulation.csv"
-SIMU_LOAD_CSV  = Path(__file__).resolve().parent / "load_simulation.csv"
+# Sorties rangées par usage : train/ (fenêtres d'entraînement) et simu/ (fenêtres
+# de test/replay). Le dossier parent est créé automatiquement à l'écriture.
+# Renommer ensuite en irradiance/load_{train,simu}_<regime>[_4d].csv (cf. SIMULATION.md).
+TRAIN_IRR_CSV  = Path(__file__).resolve().parent / "train" / "irradiance_training.csv"
+TRAIN_LOAD_CSV = Path(__file__).resolve().parent / "train" / "load_training.csv"
+SIMU_IRR_CSV   = Path(__file__).resolve().parent / "simu" / "irradiance_simulation.csv"
+SIMU_LOAD_CSV  = Path(__file__).resolve().parent / "simu" / "load_simulation.csv"
 
 
 def extract_window(nb_days: int, month: int, start_date: int) -> pd.DataFrame:

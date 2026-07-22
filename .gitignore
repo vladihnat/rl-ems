@@ -22,7 +22,11 @@ data/raw/
 data/test*
 data/pyrano_simu.csv
 data/data_import_helpers.py
-data/*.csv 
+# CSV bruts/scratch à la racine de data/ ignorés ; les données de simulation
+# TRAITÉES sont suivies dans data/train/ et data/simu/ (cf. SIMULATION.md).
+data/*.csv
+!data/train/
+!data/simu/
 explore_pymgrid25.py
 test_compat.py
 cluster/ServiceHPC_SiteSPE.pdf
