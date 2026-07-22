@@ -22,9 +22,9 @@ battery:
   soc_min: 0.2
 data:
   load_column: Conso_tot
-  load_csv: data/load_simu_ete_haute_4d.csv
+  load_csv: data/simu/load_simu_ete_haute_4d.csv
   pv_column: Global30_kW
-  pv_csv: data/irradiance_simu_ete_haute_4d.csv
+  pv_csv: data/simu/irradiance_simu_ete_haute_4d.csv
 experiment:
   name: exp28_ete_haute
   seed: 40

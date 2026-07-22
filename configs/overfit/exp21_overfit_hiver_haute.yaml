@@ -20,9 +20,9 @@ time:
   horizon_h: 24
 
 data:
-  pv_csv: "data/irradiance_simu_hiver_haute_4d.csv"
+  pv_csv: "data/simu/irradiance_simu_hiver_haute_4d.csv"
   pv_column: "Global30_kW"
-  load_csv: "data/load_simu_hiver_haute_4d.csv"
+  load_csv: "data/simu/load_simu_hiver_haute_4d.csv"
   load_column: "Conso_tot"
 
 observation:

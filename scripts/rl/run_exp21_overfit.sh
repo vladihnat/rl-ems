@@ -23,8 +23,8 @@ WINDOW="${WINDOW:-hiver_haute_4d}"          # fenêtre overfit (ré-extractible 
 SWEEP="${SWEEP:-exp21_overfit_${WINDOW%_4d}}"
 CONFIG="configs/sweeps/${SWEEP}/${RUN}.yaml"     # config PAR RUN (norm_obs varie → replay fidèle)
 MODEL="results/${SWEEP}/${RUN}/best_model.zip"
-PV="data/irradiance_simu_${WINDOW}.csv"
-LOAD="data/load_simu_${WINDOW}.csv"
+PV="data/simu/irradiance_simu_${WINDOW}.csv"
+LOAD="data/simu/load_simu_${WINDOW}.csv"
 OUT="monitoring/runs/rl_${SWEEP}_${RUN}_monitoring_table.csv"
 
 for f in "$CONFIG" "$MODEL" "$PV" "$LOAD"; do

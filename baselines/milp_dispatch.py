@@ -360,7 +360,7 @@ def run_oracle_vs_global(config_path: str, replan_every=None, horizon_steps=None
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="MILP roulant : warm-start, vérif repro, oracle 24h.")
-    ap.add_argument("--config", default="configs/exp14_Batt400_explore.yaml")
+    ap.add_argument("--config", default="configs/overfit/exp28_hiver_haute.yaml")
     ap.add_argument("--max-windows", type=int, default=5)
     ap.add_argument("--check", action="store_true", help="Vérifier la reproduction Pb env vs MILP.")
     ap.add_argument("--oracle", action="store_true", help="Oracle 24h glissant vs MILP global (test).")

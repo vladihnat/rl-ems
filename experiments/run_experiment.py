@@ -1,7 +1,7 @@
 """Single entry point for running microgrid experiments.
 
 Usage:
-    python experiments/run_experiment.py --config configs/exp01_perfect_foresight.yaml
+    python experiments/run_experiment.py --config configs/holdout/exp31_c1_hiver_haute.yaml
 """
 
 import argparse

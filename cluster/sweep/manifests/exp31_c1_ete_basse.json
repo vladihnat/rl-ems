@@ -1,0 +1,23 @@
+[
+  {
+    "index": 0,
+    "config": "configs/sweeps/exp31_c1_ete_basse/run_000.yaml",
+    "params_override": {
+      "seed": 40
+    }
+  },
+  {
+    "index": 1,
+    "config": "configs/sweeps/exp31_c1_ete_basse/run_001.yaml",
+    "params_override": {
+      "seed": 41
+    }
+  },
+  {
+    "index": 2,
+    "config": "configs/sweeps/exp31_c1_ete_basse/run_002.yaml",
+    "params_override": {
+      "seed": 42
+    }
+  }
+]

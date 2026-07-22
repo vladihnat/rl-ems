@@ -35,8 +35,8 @@ rsync -vau --progress \
     --exclude='data/clean/' \
     --exclude='data/old/' \
     --exclude='data/extra_cases/' \
-    --exclude='data/irradiance_simulation.csv' \
-    --exclude='data/load_simulation.csv' \
+    --exclude='data/simu/irradiance_simulation.csv' \
+    --exclude='data/simu/load_simulation.csv' \
     --exclude='data/pyrano_simu.csv' \
     --exclude='data/*.py' \
     --exclude='rapport/' \

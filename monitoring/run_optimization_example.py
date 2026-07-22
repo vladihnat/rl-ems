@@ -7,12 +7,12 @@ interactive matplotlib windows.
 
 Usage:
     python -m monitoring.run_optimization_example \
-        --config configs/exp08_realLoad.yaml \
-        --model  results/exp08_realLoad_300Bs_g99/sac_model.zip \
-        --forecast data/irradiance_simulation.csv \
-        [--measures data/irradiance_simulation.csv] \
-        [--load-csv data/load_simulation.csv] \
-        --out monitoring/runs/exp08_monitoring_table.csv
+        --config configs/holdout/exp31_c1_hiver_haute.yaml \
+        --model  results/exp31_c1_hiver_haute/run_000/best_model.zip \
+        --forecast data/simu/irradiance_simu_hiver_haute_4d.csv \
+        [--measures data/simu/irradiance_simu_hiver_haute_4d.csv] \
+        [--load-csv data/simu/load_simu_hiver_haute_4d.csv] \
+        --out monitoring/runs/exp31_c1_hiver_haute_monitoring_table.csv
 
 Generate simulation data first:
     python data/extract_pyrano_simu.py --nbD 7 --month 2 --startDate 1 --usage simu
@@ -417,7 +417,7 @@ def main():
     p.add_argument("--load-csv", default=None,
                    help="Deployment load CSV (real-load configs). Overrides the "
                         "config's data.load_csv so simulation data stays separate "
-                        "from training data. Typically data/load_simulation.csv.")
+                        "from training data. Typically data/simu/load_simulation.csv.")
     p.add_argument("--split", default="full", choices=["full", "test", "train"],
                    help="'full' replays the deployment CSV; 'test'/'train' replay "
                         "the exact registry split (same data run_experiment.py "

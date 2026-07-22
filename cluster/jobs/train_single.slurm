@@ -1,6 +1,6 @@
 #!/bin/bash
 # SLURM single job — une seule expérience (fallback / test)
-# Usage : CONFIG=configs/exp01_perfect_foresight.yaml sbatch cluster/jobs/train_single.slurm
+# Usage : CONFIG=configs/holdout/exp31_c1_hiver_haute.yaml sbatch cluster/jobs/train_single.slurm
 # Ou via : ./cluster/submit.sh <exp_name>
 #
 #SBATCH -J train
@@ -20,7 +20,7 @@ set -euo pipefail
 export PYTHONUTF8=1
 export LC_ALL=C.UTF-8 LANG=C.UTF-8
 
-CONFIG=${CONFIG:-configs/exp01_perfect_foresight.yaml}
+CONFIG=${CONFIG:-configs/holdout/exp31_c1_hiver_haute.yaml}
 echo "[train_single] config=${CONFIG}"
 
 module purge

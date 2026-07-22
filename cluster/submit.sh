@@ -2,7 +2,9 @@
 # Soumet une seule expérience sur le cluster (push + sbatch train_single).
 #
 # Usage : ./cluster/submit.sh <exp_name>
-#   ex : ./cluster/submit.sh exp07_randSoC
+#   ex : ./cluster/submit.sh exp31_c1_hiver_haute
+#   <exp_name> peut être un nom nu (cherché dans configs/{overfit,holdout,_archive}/)
+#   ou un chemin relatif complet (ex : configs/overfit/exp28_hiver_haute).
 #
 # Variables configurables :
 REMOTE_HOST=${REMOTE_HOST:-HERRERA-NATIVI_V@193.48.30.217}
@@ -18,9 +20,16 @@ if [[ -z "$EXP_NAME" ]]; then
     exit 1
 fi
 
-CONFIG="configs/${EXP_NAME}.yaml"
-if [[ ! -f "${ROOT}/${CONFIG}" ]]; then
-    echo "[submit] Config introuvable : ${ROOT}/${CONFIG}" >&2
+# Résout le config : chemin complet fourni, sinon cherché dans les sous-dossiers famille.
+CONFIG=""
+for CAND in "configs/${EXP_NAME}.yaml" \
+            "configs/overfit/${EXP_NAME}.yaml" \
+            "configs/holdout/${EXP_NAME}.yaml" \
+            "configs/_archive/${EXP_NAME}.yaml"; do
+    if [[ -f "${ROOT}/${CAND}" ]]; then CONFIG="$CAND"; break; fi
+done
+if [[ -z "$CONFIG" ]]; then
+    echo "[submit] Config introuvable pour '${EXP_NAME}' (cherché dans configs/{,overfit/,holdout/,_archive/})." >&2
     exit 1
 fi
 

@@ -1,0 +1,85 @@
+# exp31 — VERSION FINALE hors-overfit : protocole train/test spécialiste.
+# C1 = meilleur bras exp28 (r_hold_export seul). FH hiver 4.04% +-0.71.
+# Scénario : hiver_haute  (modèle specialiste)
+#   TRAIN  : data/train/irradiance_train_hiver_haute.csv  (fenêtre longue, split temporel 0.8/0.2)
+#   TEST   : data/simu/irradiance_simu_hiver_haute_4d.csv  — DISJOINT du train (vérifié : 0 timestamp commun),
+#            évalué au REPLAY (scripts/rl|milp/run_exp31.sh), scoring N-1 + boundary_soc_credit.
+# Différence vs exp30 : on QUITTE l'overfit (eval_on_train:false, train_split 0.8, val_split 0.2
+#   => make_env/_temporal_split3 : train / val (sélection best-model) / test held-out).
+# Choix des termes de reward : re-score PLEIN-HORIZON (score_days 2->3) des sweeps exp28/29/30.
+#   - sigma_discharge_hold (exp30) MONOTONEMENT NOCIF : 0/0.25/0.5 -> FH hiver 4.6/6.6/13.4%
+#     => écarté (gagne la fenêtre N-1 en hypothéquant le jour non scoré).
+#   - la "paire gagnante" exp29 (v3=True x charge_hold=1.0) est un ARTEFACT N-1
+#     (meilleure en N-1 2.96%, parmi les pires en plein horizon 5.55%) => v3=False retenu.
+# total_timesteps 500k->1M : la fenêtre de train est 45-75 j (vs 4 j en overfit).
+battery:
+  capacity_kwh: 400.0
+  efficiency_charge: 0.9
+  efficiency_discharge: 0.9
+  init_soc: 0.5
+  max_charge_kw: 100.0
+  max_discharge_kw: 100.0
+  pv_charge_mode: surplus
+  soc_max: 0.9
+  soc_min: 0.2
+data:
+  load_column: Conso_tot
+  load_csv: data/train/load_train_hiver_haute.csv
+  pv_column: Global30_kW
+  pv_csv: data/train/irradiance_train_hiver_haute.csv
+experiment:
+  name: exp31_c1_hiver_haute
+  seed: 40
+grid:
+  curtailment: clip
+  hc_midday: true
+  max_export_kw: 500.0
+  max_import_kw: 500.0
+  price_hc: 0.1895
+  price_hp: 0.2475
+  price_type: step_hp_hc
+load:
+  base_load_kw: 1.0
+  type: real
+observation:
+  load_forecast: true
+  price_export_forecast: true
+  timing_feature: false
+  timing_features_v2: true
+  timing_features_v3: false
+pv:
+  eta_ref: 0.2
+  surface_m2: 1600.0
+  type: perfect
+reward:
+  charge_hold_deadline: false
+  sigma_charge_hold: 0.0
+  sigma_discharge_hold: 0.0
+  sigma_export_stock: 0.0
+  sigma_hold_export: 0.5
+  sigma_soc: 10.0
+  sigma_store: 1.0
+  soc_safe_max: 0.9
+  soc_safe_min: 0.2
+  spread_penalty: true
+  store_value: true
+  store_value_mode: milp_dual
+time:
+  delta_t_min: 15
+  horizon_h: 24
+training:
+  algorithm: SAC
+  batch_size: 256
+  buffer_size: 750000
+  ent_coef: auto
+  eval_on_train: false
+  gamma: 0.999
+  learning_rate: 0.0003
+  learning_starts: 10000
+  norm_obs: true
+  norm_reward: false
+  random_soc: false
+  split_method: temporal
+  total_timesteps: 1000000
+  train_split: 0.8
+  val_split: 0.2

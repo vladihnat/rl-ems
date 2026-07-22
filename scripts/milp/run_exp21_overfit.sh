@@ -10,9 +10,9 @@ cd "$ROOT"
 # BASE (battery/grid/time/pv/load identiques à tous les run_NNN). À overlayer sur la sortie RL.
 # WINDOW surchargeable : WINDOW=ete_haute_4d ./scripts/milp/run_exp21_overfit.sh
 WINDOW="${WINDOW:-hiver_haute_4d}"
-CONFIG="configs/exp21_overfit_${WINDOW%_4d}.yaml"   # ..._hiver_haute.yaml / ..._ete_haute.yaml
-PV="data/irradiance_simu_${WINDOW}.csv"
-LOAD="data/load_simu_${WINDOW}.csv"
+CONFIG="configs/overfit/exp21_overfit_${WINDOW%_4d}.yaml"   # ..._hiver_haute.yaml / ..._ete_haute.yaml
+PV="data/simu/irradiance_simu_${WINDOW}.csv"
+LOAD="data/simu/load_simu_${WINDOW}.csv"
 OUT="monitoring/runs/milp_exp21_overfit_${WINDOW}_monitoring_table.csv"
 PLAN_OUT="monitoring/runs/milp_exp21_overfit_${WINDOW}_plan.csv"
 

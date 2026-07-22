@@ -4,14 +4,14 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
-# Référence MILP du sweep exp29, pendant de scripts/rl/run_exp29.sh. exp29 n'ajoute qu'un terme de
-# reward RL (r_charge_hold, sigma_charge_hold) + 2 features d'obs (timing_v3) — purement côté
-# agent, INVISIBLE du MILP. Le solve MILP est donc identique à exp25/exp27/exp28 : mêmes
-# données/prix, on réutilise configs/overfit/exp21_overfit_${CASE}.yaml. Seuls les noms de sortie changent
-# (milp_exp29_*) ; le CSV est byte-équivalent à milp_exp28_* (on peut aussi réutiliser directement
-# les sorties exp28 pour la comparaison).
+# Référence MILP du sweep exp30, pendant de scripts/rl/run_exp30.sh. exp30 n'ajoute qu'un terme
+# de reward RL (r_discharge_hold, sigma_discharge_hold) + un fix du helper charge-side
+# (charge_hold_deadline) — purement côté agent, INVISIBLE du MILP. Le solve MILP est donc
+# identique à exp25/exp27/exp28/exp29 : mêmes données/prix, on réutilise
+# configs/overfit/exp21_overfit_${CASE}.yaml. Seuls les noms de sortie changent (milp_exp30_*) ; le CSV
+# est byte-équivalent à milp_exp28_*/milp_exp29_* (réutilisables directement pour comparer).
 #
-# Usage : ./scripts/milp/run_exp29.sh [CASE] [extra python args...]
+# Usage : ./scripts/milp/run_exp30.sh [CASE] [extra python args...]
 #   CASE : hiver_haute (défaut) | ete_haute
 
 CASE="${1:-${CASE:-hiver_haute}}"
@@ -21,8 +21,8 @@ WINDOW="${CASE}_4d"
 CONFIG="configs/overfit/exp21_overfit_${CASE}.yaml"
 PV="data/simu/irradiance_simu_${WINDOW}.csv"
 LOAD="data/simu/load_simu_${WINDOW}.csv"
-OUT="monitoring/runs/milp_exp29_${WINDOW}_monitoring_table.csv"
-PLAN_OUT="monitoring/runs/milp_exp29_${WINDOW}_plan.csv"
+OUT="monitoring/runs/milp_exp30_${WINDOW}_monitoring_table.csv"
+PLAN_OUT="monitoring/runs/milp_exp30_${WINDOW}_plan.csv"
 
 for f in "$CONFIG" "$PV" "$LOAD"; do
     if [ ! -f "$f" ]; then
@@ -33,7 +33,7 @@ for f in "$CONFIG" "$PV" "$LOAD"; do
     fi
 done
 
-echo "[sim] exp29 MILP | case=$CASE | PV=$PV | load=$LOAD -> $OUT"
+echo "[sim] exp30 MILP | case=$CASE | PV=$PV | load=$LOAD -> $OUT"
 micromamba run -n stageCorse python -m monitoring.run_milp_optimization_example \
     --config "$CONFIG" \
     --forecast "$PV" \

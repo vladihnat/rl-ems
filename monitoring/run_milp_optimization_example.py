@@ -9,9 +9,9 @@ model and the env's nonlinear one.
 
 Usage:
     python -m monitoring.run_milp_optimization_example \
-        --config configs/exp01_perfect_foresight.yaml \
-        --forecast data/pyrano_simu.csv \
-        [--measures data/pyrano_simu.csv] \
+        --config configs/overfit/exp21_overfit_hiver_haute.yaml \
+        --forecast data/simu/irradiance_simu_hiver_haute_4d.csv \
+        [--measures data/simu/irradiance_simu_hiver_haute_4d.csv] \
         --out monitoring/runs/milp_monitoring_table.csv \
         --plan-out monitoring/runs/milp_plan.csv
 
@@ -117,7 +117,7 @@ def run(
             to ``forecast_csv`` (perfect foresight).
         load_csv: Optional deployment load CSV (real-load configs). Overrides
             ``cfg["data"]["load_csv"]`` so simulation data stays separate from
-            training data. Typically ``data/load_simulation.csv``.
+            training data. Typically ``data/simu/load_simulation.csv``.
         split: ``"full"`` (default) solves over the whole CSV / deployment data;
             ``"test"`` or ``"train"`` solves over the exact registry split (same
             data ``experiments/run_experiment.py`` evaluated), ignoring the CSV
@@ -287,7 +287,7 @@ def run(
 def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--config", required=True,
-                   help="YAML config (e.g. configs/exp01_perfect_foresight.yaml)")
+                   help="YAML config (e.g. configs/overfit/exp21_overfit_hiver_haute.yaml)")
     p.add_argument("--forecast", default=None,
                    help="Forecast CSV — also used as the env's deployment data "
                         "when --measures is omitted.")
@@ -297,7 +297,7 @@ def main():
     p.add_argument("--load-csv", default=None,
                    help="Deployment load CSV (real-load configs). Overrides the "
                         "config's data.load_csv so simulation data stays separate "
-                        "from training data. Typically data/load_simulation.csv.")
+                        "from training data. Typically data/simu/load_simulation.csv.")
     p.add_argument("--split", default="full", choices=["full", "test", "train"],
                    help="'full' solves over the deployment CSV; 'test'/'train' "
                         "solve over the exact registry split (same data "
