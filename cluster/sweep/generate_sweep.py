@@ -4,7 +4,7 @@
 Usage
 -----
 python cluster/sweep/generate_sweep.py \\
-    --base-config configs/exp03_1M_300.yaml \\
+    --base-config configs/overfit/exp28_hiver_haute.yaml \\
     --sweep-name gamma_lr_sweep \\
     --params gamma=0.99,0.999 lr=0.0003,0.001 \\
     --seeds 42,43,44
@@ -75,6 +75,12 @@ PARAM_MAP = {
     "sigma_charge_hold": "reward.sigma_charge_hold",
     # Features de timing v3 — 2 scalaires CHARGE-side (QUAND charger au moins cher, exp29+) :
     "timing_features_v3": "observation.timing_features_v3",
+    # 4e miroir SERVE-side (exp30+) : pénalise la décharge batterie→charge avant le pic export
+    # (les « pauses » du MILP, cf. base_microgrid_env._discharge_hold_cost) :
+    "sigma_discharge_hold": "reward.sigma_discharge_hold",
+    # Fix deadline du min faisable charge-side (exp30+) : recherche bornée au prochain pic export
+    # (cf. base_microgrid_env._feasible_charge_export_min) — s'applique reward + obs timing_v3 :
+    "charge_hold_deadline": "reward.charge_hold_deadline",
     # WS-1c — ancre MILP persistante / anti-washout (exp18+) :
     "bc_anchor_demo_buffer":  "training.bc_anchor_demo_buffer",
     "bc_anchor_demo_frac":    "training.bc_anchor_demo_frac",

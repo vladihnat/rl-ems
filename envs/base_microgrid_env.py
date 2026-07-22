@@ -144,6 +144,27 @@ class MicrogridEnv(gym.Env):
         # comme sigma_hold_export (swept, arm 0). 0.0 = inactif (runs existants bit-identiques).
         self._sigma_charge_hold = config["reward"].get("sigma_charge_hold", 0.0)
 
+        # 4e terme miroir (exp30) : pénalise la décharge qui SERT LA CHARGE maintenant quand un
+        # prix d'export futur dépasse l'import courant (oc_serve = max(0, max(export_fc) −
+        # p_imp_now), cf. _discharge_hold_cost). Cible les « pauses » du soir = 25 % du résiduel
+        # exp28/29 non traité : le MILP importe 2 pas à 0.2475 (HP) pour TENIR le stock jusqu'au
+        # pic export 21:45/0.442, le RL sert la charge depuis la batterie et arrive au pic à
+        # moitié vide (27 vs 57 kWh exportés à 0.442, audit exp29). La part EXPORTÉE de la
+        # décharge est déjà couverte par sigma_hold_export ⇒ ici seule la part batterie→charge
+        # (e_batt_serve). ⚠ résidu sur l'optimum PLUS GROS que les autres miroirs : le MILP sert
+        # AUSSI la charge depuis la batterie pré-pic (le stock excédant ce qui est livrable à
+        # max_discharge_kw pendant le pic est mieux utilisé en autoconsommation) ⇒ prior TRÈS
+        # doux (sweep σ ∈ {0, 0.25, 0.5}, arm 0). 0.0 = inactif (runs existants bit-identiques).
+        self._sigma_discharge_hold = config["reward"].get("sigma_discharge_hold", 0.0)
+
+        # Fix « deadline » (exp30) du min faisable charge-side : si actif, la recherche du pas de
+        # charge le moins cher s'arrête au PROCHAIN pic export (argmax(export_fc)) — la charge
+        # prépare CE pic ; « attendre la fenêtre pas chère de demain » (chevauchement 24 h, cf.
+        # _charge_hold_cost) n'est pas une option pour le pic de ce soir. S'applique au helper
+        # _feasible_charge_export_min ⇒ cohérent reward (sigma_charge_hold) + obs (timing_v3).
+        # Opt-in défaut false : préserve la repro exp29 (même convention que pv_charge_mode).
+        self._charge_hold_deadline = config["reward"].get("charge_hold_deadline", False)
+
         price_forecast_dim = self.horizon_steps if self.price_signal.has_forecast else 0
         load_forecast_dim = self.horizon_steps if self._load_forecast_in_obs else 0
         export_forecast_dim = (
@@ -363,6 +384,11 @@ class MicrogridEnv(gym.Env):
         masque, le min serait la nuit (export plancher) où la charge est physiquement impossible.
         Retourne None si aucun pas faisable dans l'horizon ou sans forecast prix. L'élément 0 des
         forecasts = maintenant : si la charge est faisable maintenant, min ≤ p_exp_now garanti.
+
+        Si ``reward.charge_hold_deadline`` est actif, la recherche est bornée au prochain pic
+        export (``argmax(exp_fc)`` inclus) : la charge prépare CE pic, les fenêtres bon marché
+        situées APRÈS (typiquement celle du lendemain via l'horizon 24 h) ne sont pas des
+        alternatives réelles et contaminaient oc_charge sur des pas de charge optimaux.
         """
         if not self.price_signal.has_forecast:
             return None
@@ -371,9 +397,13 @@ class MicrogridEnv(gym.Env):
             feasible = pv_fc > 0.0
         else:
             feasible = (pv_fc - self.load.get_forecast(idx, self.horizon_steps)) > 0.0
+        exp_fc = self.price_signal.get_export_forecast(idx, self.horizon_steps)
+        if self._charge_hold_deadline:
+            deadline = int(np.argmax(exp_fc))
+            feasible = feasible.copy()
+            feasible[deadline + 1:] = False
         if not feasible.any():
             return None
-        exp_fc = self.price_signal.get_export_forecast(idx, self.horizon_steps)
         masked = np.where(feasible, exp_fc, np.inf)
         argmin = int(np.argmin(masked))
         return argmin, float(masked[argmin])
@@ -402,6 +432,32 @@ class MicrogridEnv(gym.Env):
             return 0.0
         price_exp_now = self.price_signal.get_export_price(idx)
         return max(0.0, price_exp_now - found[1])
+
+    def _discharge_hold_cost(self, idx: int) -> float:
+        """Coût d'opportunité (€/kWh) de décharger pour SERVIR LA CHARGE maintenant au lieu de
+        tenir le stock pour l'export futur :  ``oc = max(0, max(export_forecast) − price_imp_now)``.
+
+        4e terme miroir : 1 kWh tenu dans la batterie rapporte max(export_fc) au pic ; le
+        décharger maintenant évite seulement price_imp_now d'import. Quand le pic export paie
+        plus que l'import courant (haute saison : 0.442 > HP 0.2475), la « pause » du MILP
+        (importer pour servir la charge, garder le stock) est strictement gagnante.
+
+        PAS de facteur rendement : ``eta_d`` s'applique identiquement à « décharger maintenant
+        (servir la charge) » et « décharger plus tard (exporter) » ⇒ se simplifie (même raison
+        que les trois autres miroirs).
+
+        ⚠ Résidu sur l'optimum PLUS GROS que les autres miroirs : le MILP sert aussi la charge
+        depuis la batterie AVANT le pic dès que le stock excède ce qui est livrable à
+        max_discharge_kw pendant le pic (ce surplus de stock est mieux consommé qu'exporté après
+        le pic). oc ne voit pas cette limite de déliverabilité ⇒ prior TRÈS doux (σ balayé bas,
+        arm 0 = contrôle), jugé sur le net_cost réel. Après le pic, max futur ≤ import ⇒ oc = 0
+        et la décharge d'autoconsommation redevient gratuite. Repli 0 sans forecast.
+        """
+        if not self.price_signal.has_forecast:
+            return 0.0
+        price_imp_now = self.price_signal.get_import_price(idx)
+        v_exp = float(self.price_signal.get_export_forecast(idx, self.horizon_steps).max())
+        return max(0.0, v_exp - price_imp_now)
 
     def step(self, action):
         # Lues AVANT le calcul de Pb_command : la contrainte EDF ci-dessous borne la charge
@@ -529,9 +585,23 @@ class MicrogridEnv(gym.Env):
                 oc_charge = self._charge_hold_cost(self.step_index)
                 r_charge_hold = -self._sigma_charge_hold * oc_charge * e_charge_kw * self.delta_t_h
 
+        # r_discharge_hold — 4e miroir (exp30) : pénalise la décharge qui SERT LA CHARGE quand le
+        # pic export futur paie plus que l'import courant (oc_serve = max(0, max(export_fc) −
+        # p_imp_now), cf. _discharge_hold_cost). Encode la « pause » du MILP (importer à HP pour
+        # tenir le stock jusqu'au pic 0.442). e_batt_serve = part de la décharge absorbée par le
+        # déficit local (load − pv) ; la part exportée est déjà couverte par r_hold_export.
+        r_discharge_hold = 0.0
+        if self._sigma_discharge_hold > 0.0:
+            e_batt_serve_kw = min(max(Pb_effective, 0.0), max(0.0, load_t - pv_t))
+            if e_batt_serve_kw > 0.0:
+                oc_serve = self._discharge_hold_cost(self.step_index)
+                r_discharge_hold = (
+                    -self._sigma_discharge_hold * oc_serve * e_batt_serve_kw * self.delta_t_h
+                )
+
         # reward = r_eco + r_soc + r_curt + r_bat_power + r_spread
         reward = (r_eco + r_soc + r_curt + r_spread + r_phantom + r_store
-                  + r_export_stock + r_hold_export + r_charge_hold)
+                  + r_export_stock + r_hold_export + r_charge_hold + r_discharge_hold)
 
         # reward = r_eco + r_soc + r_curt
 
@@ -563,6 +633,7 @@ class MicrogridEnv(gym.Env):
                     "r_export_stock": float(r_export_stock),
                     "r_hold_export": float(r_hold_export),
                     "r_charge_hold": float(r_charge_hold),
+                    "r_discharge_hold": float(r_discharge_hold),
                     "reward":    float(reward),
                     "pcurt":     float(Pcurt),
                     "pph":       float(P_phantom),
@@ -593,6 +664,7 @@ class MicrogridEnv(gym.Env):
             "r_export_stock": r_export_stock,
             "r_hold_export": r_hold_export,
             "r_charge_hold": r_charge_hold,
+            "r_discharge_hold": r_discharge_hold,
             "P_phantom": P_phantom,
             "Pcurt": Pcurt,
             "pv_t": pv_t,
