@@ -45,7 +45,7 @@ Chaque tâche de l'array correspond à une combinaison (hyperparamètres × seed
 ```bash
 # 1. Générer la grille (produit cartésien params × seeds)
 python cluster/sweep/generate_sweep.py \
-    --base-config configs/exp08_realLoad.yaml \
+    --base-config configs/overfit/exp28_hiver_haute.yaml \
     --sweep-name batchS_lr_sweep \
     --params batch_size=256,512 lr=0.0003,0.001 \
     --seeds 42,43,44
@@ -174,12 +174,12 @@ tient même sans cap, mais le throttle reste la bonne pratique — et devient in
 
 ### Ajouter un nouvel experiment au sweep
 
-1. Créer (ou copier) un config dans `configs/` :
+1. Créer (ou copier) un config dans la famille adéquate (`configs/overfit/` ou `configs/holdout/`) :
    ```bash
-   cp configs/exp03_1M_300.yaml configs/exp09_new.yaml
-   # éditer exp09_new.yaml
+   cp configs/overfit/exp28_hiver_haute.yaml configs/overfit/exp32_new.yaml
+   # éditer exp32_new.yaml
    ```
-2. Relancer `generate_sweep.py` avec `--base-config configs/exp09_new.yaml`
+2. Relancer `generate_sweep.py` avec `--base-config configs/overfit/exp32_new.yaml`
 3. `./cluster/sweep/launch_sweep.sh <sweep_name>`
 
 ### Re-scoring sans réentraîner
@@ -217,7 +217,8 @@ cluster/
 │   ├── launch_sweep.sh                # push + sbatch array
 │   ├── aggregate_results.py           # agrégation des gaps par sweep
 │   ├── rescore_runs.py                # re-scoring post-traitement (sans réentraîner)
-│   └── manifests/                     # JSONs générés (exp10 → exp23)
+│   └── manifests/                     # JSONs des familles gardées (à plat, résolus par launch_sweep.sh)
+│       └── _archive/                  #   manifests des anciennes expériences
 ├── transfer/
 │   ├── push.sh                        # local → cluster
 │   └── pull_results.sh               # cluster → local

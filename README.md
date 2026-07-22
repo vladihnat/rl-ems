@@ -1,6 +1,12 @@
 # EMS-RL — Energy Management System par Reinforcement Learning
 
-> Remplacement d'un optimiseur MILP/LP par un agent RL pour la gestion de batterie dans un microréseau PV.
+> Remplacement d'un optimiseur MILP/LP par un agent RL (SAC) pour la gestion de batterie
+> dans un microréseau PV (contexte EDF / réseau Corse : contrainte *no-grid-charging*,
+> tarif HP/HC avec export saisonnier).
+
+Le fil rouge du projet est la **réduction de l'écart (« gap ») entre l'agent RL et l'optimum
+MILP**. Les expériences sont organisées en **deux familles** (cf. §4) : la validation *overfit*
+de la formulation, puis l'évaluation propre *train/test* (held-out).
 
 ---
 
@@ -8,193 +14,200 @@
 
 ```
 .
-├── RL_communication-flow.md
-├── README.md
-├── prompts.md
+├── README.md                     ← ce fichier (structure + synthèse)
+├── SIMULATION.md                 ← guide : données → scripts .sh → aggregate results
+├── RL_communication-flow.md      ← flux interne env ↔ agent (détail modules)
+├── prompts.md                    ← journal des prompts (cf. §8 « VIBE CODING »)
 ├── requirements.txt
-├── agents/                  # algos RL + Behavior Cloning
-│   ├── sac_agent.py         # SAC (principal)
-│   ├── ddpg_agent.py
-│   ├── td3_agent.py
-│   ├── ppo_agent.py
-│   ├── bc_sac.py            # Behavior Cloning + ancre MILP / AWAC
-│   └── common.py            # callbacks d'éval, sélection best-model
-├── baselines/
-│   ├── milp_solver.py       # optimum MILP (CVXPY + HiGHS)
-│   └── milp_dispatch.py     # shim env pour rejouer le plan MILP
-├── configs/                 # configs YAML par expérience
-│   └── sweeps/              # configs générées par run (sweeps)
-├── data/
-│   ├── clean_meteo.py
-│   └── *_simu_*.csv         # PV/charge simulées + données pyranomètre (brutes/nettoyées)
-├── envs/
+│
+├── envs/                         # environnement Gymnasium custom (remplace pymgrid)
 │   ├── base_microgrid_env.py
-│   ├── registry.py          # make_env / make_env_overfit
-│   └── components/
-│       ├── battery.py
-│       ├── load.py
-│       ├── price_signal.py
-│       └── pv_source.py
-├── monitoring/
-│   ├── monitoring_table.py
-│   ├── plot_monitoring_milp.py
-│   ├── plot_monitoring.py
-│   ├── plot_power.py
-│   ├── run_milp_optimization_example.py
-│   ├── run_optimization_example.py
-│   └── runs/                # CSV de plannings rejoués
+│   ├── registry.py               #   make_env (split) / make_env_overfit
+│   └── components/               #   battery.py, load.py, pv_source.py, price_signal.py
+├── agents/                       # algos RL + Behavior Cloning
+│   ├── sac_agent.py              #   SAC (principal) ; ddpg/td3/ppo aussi
+│   ├── bc_sac.py                 #   Behavior Cloning + ancre MILP / AWAC
+│   └── common.py                 #   callbacks d'éval, sélection best-model
+├── baselines/
+│   ├── milp_solver.py            #   optimum MILP (CVXPY + HiGHS), binaire complémentarité import/export
+│   └── milp_dispatch.py          #   shim env pour rejouer le plan MILP
 ├── evaluation/
-│   ├── compare.py
-│   └── metrics.py           # métriques + gap saisonnier + boundary_soc_credit
+│   ├── metrics.py                #   métriques + gap saisonnier (gap_abs_eur) + boundary_soc_credit
+│   └── compare.py
 ├── experiments/
-│   └── run_experiment.py    # point d'entrée (entraînement / --rescore)
-├── cluster/                 # infra de sweep HPC SLURM (cf. cluster/README.md)
-├── scripts/                 # scripts bash d'optimisation
-│   ├── rl/
-│   └── milp/
-├── tests/
-└── results/                 # artefacts par expérience (modèle, métriques, courbes)
+│   └── run_experiment.py         # POINT D'ENTRÉE unique (entraînement / --rescore)
+├── monitoring/                   # replay + plots (sorties → monitoring/runs/, gitignoré)
+│   ├── run_optimization_example.py      #   replay RL
+│   └── run_milp_optimization_example.py #   replay MILP
+│
+├── configs/                      # configs YAML, RANGÉES PAR FAMILLE
+│   ├── overfit/                  #   validation overfit (exp21, 22, 26, 28, 29, 30) — cf. configs/overfit/README.md
+│   ├── holdout/                  #   train/test propre (exp31 : c1/c2 × 4 régimes + combiné + smoke)
+│   ├── _archive/                 #   anciennes expériences (exp01→exp20, exp23/24/25/27, …)
+│   └── sweeps/                   #   configs générés par run de sweep (gitignoré)
+├── scripts/                      # scripts bash de replay/simulation (cf. SIMULATION.md)
+│   ├── rl/    run_exp{21_overfit,22,26,28,29,30,31}.sh   + _archive/
+│   └── milp/  run_exp{21_overfit,22,26,28,29,30,31}.sh   + _archive/
+├── cluster/                      # infra de sweep HPC SLURM (cf. cluster/README.md)
+│   └── sweep/manifests/          #   manifests des familles gardées (à plat) + _archive/
+├── data/                         # données (cf. SIMULATION.md §1)
+│   ├── raw/                      #   pyranomètre brut (gitignoré)
+│   ├── clean/                    #   Pyrano1{w,M,Y}_clean.csv + load_profile_* — SOURCE d'extraction
+│   ├── train/                    #   fenêtres d'entraînement (suivies)
+│   ├── simu/                     #   fenêtres de test/replay (suivies)
+│   └── extract_pyrano_simu.py    #   + clean_meteo.py, clean_load*.py (pipeline)
+└── results/                      # artefacts par expérience (gitignoré, local)
 ```
 
 ---
 
-## 2. Utilisation
+## 2. Environnement & installation
 
-Le point d'entrée principal est **`experiments/run_experiment.py`**. Il a été conçu pour être facilement généralisable : la totalité du paramétrage (algorithme RL, hyperparamètres, composants physiques, données, horizon, prix, contraintes SoC, etc.) est pilotée par les fichiers de configuration YAML du dossier `configs/`.
-
-Exemple d'appel typique :
+Python via **micromamba**, environnement `stageCorse` (le seul autorisé à exécuter le code) :
 
 ```bash
-python experiments/run_experiment.py --config configs/exp01_perfect_foresight.yaml
+micromamba run -n stageCorse python -c "import stable_baselines3, cvxpy, highspy; print('ok')"
+# dépendances : cf. requirements.txt (stable-baselines3, gymnasium, cvxpy+HiGHS, pandas, matplotlib…)
 ```
 
-Pour lancer une nouvelle expérience, il suffit de dupliquer un fichier YAML existant, d'ajuster les champs souhaités, et de relancer le script avec le nouveau chemin de configuration. Les artefacts (modèle entraîné, métriques, courbes d'apprentissage, copie de la config utilisée) sont déposés automatiquement dans `results/<nom_experience>/`.
+---
 
-### Scripts d'optimisation (`scripts/`)
+## 3. Utilisation
 
-Pour simplifier l'utilisation des exemples d'optimisation (MILP et RL) et éviter d'avoir à retenir la combinaison config / modèle / chemin de sortie pour chaque expérience, des scripts bash dédiés ont été centralisés dans `scripts/rl/` et `scripts/milp/`. Chaque script fixe les bons chemins pour une expérience donnée et délègue à `monitoring/run_optimization_example.py` (RL) ou `monitoring/run_milp_optimization_example.py` (MILP).
-
-Exemples d'utilisation :
+Le point d'entrée unique est **`experiments/run_experiment.py`**. Tout le paramétrage (algo RL,
+hyperparamètres, composants physiques, données, horizon, prix, contraintes SoC, reward shaping)
+est piloté par les **fichiers YAML** de `configs/`.
 
 ```bash
-# Évaluation de l'agent RL entraîné pour exp02 (prix variables)
-bash scripts/rl/run_exp02.sh
+# Entraîner (dépose modèle + métriques + courbes dans results/<nom>/)
+micromamba run -n stageCorse python experiments/run_experiment.py --config configs/holdout/exp31_c1_hiver_haute.yaml
 
-# Optimisation MILP de référence sur exp02
-bash scripts/milp/run_exp02.sh
+# Re-scorer un run SANS réentraîner (recharge le modèle, régénère metrics.json/comparison.json)
+micromamba run -n stageCorse python experiments/run_experiment.py --config results/<nom>/config_used.yaml --rescore
 ```
 
-Les arguments supplémentaires sont transmis tels quels au script Python sous-jacent (`"$@"`), ce qui permet de surcharger ponctuellement un paramètre sans modifier le script.
-
-### Scoring & re-scoring
-
-Le scoring d'une expérience est piloté par la config (`training.score_days`, `training.eval_on_train`) et, côté replay, par les flags `--score-days` et `--cap-horizon` de `monitoring/run_optimization_example.py` (RL) et `monitoring/run_milp_optimization_example.py` (MILP). Le scoring étant un **post-traitement**, le flag `--rescore` de `experiments/run_experiment.py` recharge un modèle déjà sauvegardé dans `results/<nom>/` et régénère `metrics.json`/`comparison.json` avec le scoring courant **sans réentraîner** (les `.zip`/`.pkl`/`.npz` restent intacts) :
-
-```bash
-python experiments/run_experiment.py --config results/<sweep>/run_000/config_used.yaml --rescore
-```
-
-### Sweeps d'hyperparamètres (cluster)
-
-Pour lancer des grilles d'expériences en parallèle sur le cluster HPC (job array SLURM), voir **[cluster/README.md](./cluster/README.md)**.
+Pour **rejouer** un modèle entraîné ou l'optimum MILP sur une fenêtre concrète, et pour la
+construction des données, voir **[SIMULATION.md](./SIMULATION.md)**. Pour les **sweeps
+d'hyperparamètres sur cluster HPC**, voir **[cluster/README.md](./cluster/README.md)**.
 
 ---
 
-## 3. Données
+## 4. Les deux familles d'expériences
 
-L'implémentation actuelle utilise les données **`Pyrano1w_clean.csv`**. Le nettoyage et le prétraitement sont centralisés dans le dossier `data/` (voir notamment `data/clean_meteo.py`), à partir des fichiers bruts `Pyrano1w.csv`, `Pyrano1M.csv` et `Pyrano1Y.csv`.
+Le tri de fin de stage ne conserve que **deux familles** ; l'historique exploratoire (exp01→exp20
+et intermédiaires) est déplacé dans les dossiers `_archive/`.
 
-### ⚠️ Problème ouvert d'implémentation — à tester
+### Famille A — Validation *overfit* du modèle  (`configs/overfit/`)
 
-Lors du nettoyage, des **paires (cos, sin)** ont été ajoutées pour les heures de la journée et le jour de l'année, afin de casser les discontinuités artificielles du temps cyclique (par exemple, l'heure 23 et l'heure 0 sont numériquement éloignées alors qu'elles sont temporellement adjacentes).
+Protocole : `eval_on_train:true`, `train == val == test` sur une **fenêtre fixe** (4 jours d'un
+régime). Question posée : **la formulation RL est-elle capable d'atteindre l'optimum MILP** quand la
+généralisation n'est plus en jeu ? Chaque expérience valide *une implémentation précise* :
 
-Cependant, lors d'un déploiement en conditions réelles (**LIVE**), il n'est pas garanti que le modèle ait accès à ces paires sin/cos pré-calculées : seules les variables temporelles brutes seront probablement disponibles. Il faudra donc tester expérimentalement le comportement de l'agent dans les **4 configurations** :
+| Exp | Ce qu'elle vérifie |
+|-----|--------------------|
+| **exp21** | Sanity-check overfit (`make_env_overfit`) **+ fix de truncation terminale** : renvoyer `truncated` (et non `terminated`) en bord de fenêtre pour que le critic bootstrappe `V(s')` → supprime la myopie de fin d'horizon. |
+| **exp22** | **Prix fixes** pour isoler l'auto-consommation du timing **+ `boundary_soc_credit`** : crédit de SoC de bord symétrique RL/MILP corrigeant l'artefact de fenêtre de score (gap « négatif » où le RL « battait » le MILP). |
+| **exp26** | Reward shaping **PBRS `milp_dual`** : potentiel Φ = λ(t), le dual du LP à binaires figés (invariant sur l'optimum). |
+| **exp28** | Terme **miroir EXPORT `r_hold_export`** : pénalise l'export du stock *avant* le pic d'export futur (anti « déployer trop tôt »). |
+| **exp29** | Terme **miroir CHARGE `r_charge_hold`** : pénalise la charge trop précoce le matin (hors fenêtre d'export minimal). |
+| **exp30** | Terme **miroir SERVE `r_discharge_hold` + `charge_hold_deadline`** : gère les pauses du soir (borne le refill au prochain pic export). |
 
-|                      | Avec heures brutes normalisées | Sans heures brutes normalisées |
-|----------------------|:------------------------------:|:------------------------------:|
-| **Avec sin/cos**     | config A                       | config B                       |
-| **Sans sin/cos**     | config C                       | config D                       |
+Les termes exp26→exp30 sont des **potentiels invariants** (PBRS) : ils ne déplacent pas l'optimum,
+seulement la vitesse/qualité de convergence. Résultat : sur fenêtre fixe le RL approche l'optimum
+MILP, le *dump* de batterie à t0 disparaît, et le résiduel « déployer trop tôt » se décompose
+proprement (matin : charger trop tôt ; soir : décharger trop tôt).
 
-L'objectif est d'identifier si l'agent est réellement sensible à l'encodage cyclique, et si oui de prévoir un pipeline temps-réel capable de fournir ces features.
+### Famille B — Évaluation propre *train/test* (held-out)  (`configs/holdout/`)
 
----
+`exp31` sort de l'overfit : un modèle est **entraîné** sur une fenêtre longue (`train_split:0.8`,
+best-model sélectionné sur la tranche de **validation**) puis **rejoué sur une fenêtre de test
+DISJOINTE** (0 timestamp commun, vérifié). Deux familles de reward (**C1** = `sigma_charge_hold:0`,
+**C2** = `sigma_charge_hold:0.5`), 4 régimes (été/hiver × haute/basse saison) + un modèle **combiné**
+multi-saison rejoué en continu sur 16 jours.
 
-## 4. Architecture RL
+Résultats held-out (gap € = coût_RL − coût_MILP sur les jours scorés, N−1) :
 
-L'agent est un **SAC (Soft Actor-Critic)** implémenté via Stable-Baselines3. Il interagit avec un environnement Gymnasium custom (`MicrogridEnv`) qui encapsule trois composants physiques — `PVSource`, `LoadModel`, `BatteryModel` — et expose à chaque pas de temps :
-- une **observation** : SoC courant, charge, irradiance, features temporelles, prévisions PV **et charge** sur l'horizon, prévision de prix d'export, et une feature optionnelle de timing « gap à pic » (`observation.timing_feature`) ;
-- une **action** continue dans `[-1, 1]` : la commande de puissance batterie normalisée (signe : charge / décharge) ;
-- une **récompense** : coût négatif d'achat réseau + revenu de vente du surplus, pénalisée si les bornes SoC sont violées, avec des termes de **reward shaping** optionnels (PBRS prix-aware sur la valeur du stock `reward.store_value` ; coût d'opportunité export-stock `reward.sigma_export_stock`).
+| Régime de test | Gap réel | Note |
+|----------------|----------|------|
+| été (haute/basse) | **1 – 5 %** | régime le mieux résolu (PV ≫ charge, timing d'ordre 2) |
+| hiver_haute | **~18 – 24 %** | **vrai** gap (fenêtre net-**revenu**, dénominateur sain) — rate le pic d'export du soir |
+| combiné continu 16 j | **~9 – 10 %** | SoC porté à travers les transitions, MILP `optimal` sur 1440 pas |
 
-Le détail complet de la hiérarchie des modules, des équations internes et du flux de communication est documenté dans **[RL_communication-flow.md](./RL_communication-flow.md)**.
+Une seule cause, quatre visages : le RL **charge/décharge 1–4 h trop tôt** et sous-valorise le
+maintien du stock tard dans la journée. Le shaping exp28→30 réduit clairement ce biais (été
+quasi-optimal), mais un résiduel du même signe survit hors-overfit, maximal en hiver_haute où une
+heure du soir mal placée coûte le plus. *(Les chiffres détaillés et l'analyse comportementale
+complète figurent dans le rapport final ; la reproduction est décrite dans [SIMULATION.md](./SIMULATION.md).)*
 
-### Contrainte réseau & algorithmes
-
-- **Contrainte EDF no-grid-charging** : la batterie ne peut se charger que du **surplus PV** (`Pb_charge ≤ max(0, PV − charge)`) — câblée à l'identique côté MILP et RL (cf. `baselines/milp_solver.py`).
-- L'algorithme est sélectionné par config (`training.algorithm`) : **SAC** est l'algo principal ; **DDPG**, **TD3** et **PPO** sont également disponibles dans `agents/`.
-
-### Environnement custom à la place de pymgrid
-
-Initialement, le projet prévoyait de s'appuyer sur **pymgrid** pour la simulation du microréseau. Cette piste a finalement été abandonnée : à la place, `envs/base_microgrid_env.py` implémente un **environnement Gymnasium entièrement custom**, qui reproduit les fonctionnalités nécessaires de pymgrid tout en étant **totalement modifiable** (équations batterie, modèle de pertes, gestion des prix, observation, récompense, etc.). Cela évite la dépendance à une lib externe peu maintenue et donne un contrôle complet sur la physique simulée.
-
-En contrepartie, il faudra dans les travaux à venir mener des **tests et études de robustesse comparés à pymgrid** afin de vérifier que ce module custom est aussi fiable que l'environnement de référence.
-
----
-
-## 5. Expériences
-
-### exp01 — Perfect foresight, prix fixes
-
-Premier scénario de référence : prévisions PV/charge parfaites et **prix d'achat / vente fixes et égaux**. Permet de valider que la chaîne (env custom, agent SAC, MILP) fonctionne dans le cadre le plus simple.
-
-**Problématique identifiée :** avec des prix fixes et égaux, l'agent RL produit des **cycles de charge/décharge excessifs**. En optimisant pas à pas, il ne perçoit pas que décharger à l'instant *t* (même bénéfique localement) **augmente le coût des charges futures** nécessaires pour ramener la batterie à un SoC exploitable. Le critère immédiat est neutre, mais l'usure et les pertes par cycle ne sont pas internalisées.
-
-### exp02 — Prix variables
-
-Pour observer le changement de comportement du RL face à un signal économique non trivial, `configs/exp02_variable_price.yaml` introduit des **prix variables** (non constants dans le temps).
-
-**Observation :** avec des prix variables, l'agent ne fait plus de cycles parasites — mais il **ignore complètement la batterie**, comme si l'arbitrage temporel n'était plus rentable.
-
-**Hypothèse de travail :** ce comportement vient probablement de la combinaison de :
-- **rendements (charge/décharge) fixes** au lieu de variables, qui ne capturent pas la dépendance réelle des pertes à la puissance et au SoC ;
-- **absence de coût par cycle** (vieillissement, dégradation), qui rend toute utilisation de la batterie « gratuite » ou « inutile » selon la configuration.
-
-**À faire :** explorer dans les articles déjà collectés dans **Zotero** une **expression plus intelligente des rendements** (dépendants du SoC et de la puissance) et un coût explicite par cycle, afin que l'agent retrouve un usage non trivial de la batterie sous prix variables.
-
-### Étude du gap RL↔MILP (exp08 → exp23)
-
-Au-delà des scénarios de référence, l'axe de travail principal est la **réduction de l'écart (« gap ») entre l'agent RL et l'optimum MILP**, sur charge réelle et tarif Corse (`exp08`/`exp09`), batterie 400 kWh (`exp10`/`exp11`). Les briques mises en place — décrites ici comme **montages et outils**, pas comme résultats :
-
-- **Référence MILP & métriques de gap** : gap **stratifié par saison** (hiver / été) et en absolu (`gap_abs_eur`), calculés dans `experiments/run_experiment.py`. La baseline MILP intègre un **binaire de complémentarité import/export** (`baselines/milp_solver.py`) garantissant une formulation propre (pas d'aller-retour import↔export fictif).
-- **Behavior Cloning & ancre MILP** : pré-entraînement BC depuis le plan MILP, **ancre MILP persistante** anti-washout et pondération **AWAC** (`exp17`/`exp18`/`exp20`, `agents/bc_sac.py`).
-- **Reward shaping PBRS** : valeur prix-aware du stock (`exp19`) et coût d'opportunité export-stock (`exp19b`), invariants sur l'optimum.
-- **Correctif de truncation terminale** : `truncated=True` en bord d'horizon (au lieu de `terminated`) pour que le critic bootstrappe correctement la valeur de fin de fenêtre (`exp21`+).
-- **Montages de validation** : sanity-check **overfit** train==eval sur fenêtre fixe (`exp21`, `make_env_overfit`), **prix fixes** pour isoler l'auto-consommation du timing (`exp22`), **feature de timing** « gap à pic » optimum-safe (`exp23`).
-- **Méthodologie de scoring** : scoring sur N−1 jours (`--score-days`), planification à horizon borné (`--cap-horizon`) et **crédit de SoC de bord** symétrique RL/MILP (`evaluation/metrics.py`, `boundary_soc_credit`) pour des comparaisons cohérentes sur un préfixe de fenêtre.
+⚠️ **Ne jamais citer** les gaps internes de `metrics.json` en basse saison (dénominateur ≈ 0 → 49–237 %
+artefactuels) : utiliser le **gap absolu €** ou les chiffres held-out ci-dessus.
 
 ---
 
-## 6. État actuel & perspectives
+## 5. Architecture RL & baseline MILP
+
+L'agent est un **SAC (Soft Actor-Critic)** (Stable-Baselines3) sur un environnement Gymnasium custom
+(`MicrogridEnv`) encapsulant `PVSource`, `LoadModel`, `BatteryModel`, `PriceSignal`. À chaque pas :
+- **observation** : SoC, charge, irradiance, features temporelles (sin/cos), prévisions PV **et
+  charge** sur l'horizon, prévision de prix d'export, et une feature optionnelle de timing « gap au
+  pic » (`observation.timing_feature`) ;
+- **action** continue `[-1, 1]` : commande de puissance batterie normalisée (charge / décharge) ;
+- **récompense** : coût réseau négatif + revenu d'export, pénalité de violation SoC, plus les termes
+  optionnels de **reward shaping** (PBRS `store_value`, miroirs hold/charge/discharge — cf. §4).
+
+**Contrainte EDF *no-grid-charging*** : la batterie ne se charge que du **surplus PV**
+(`Pb_charge ≤ max(0, PV − charge)`), câblée à l'identique côté MILP (`baselines/milp_solver.py`) et RL.
+Un flag `battery.pv_charge_mode` bascule `surplus` (défaut) ↔ `total` (variante Duchaud-JL relâchée).
+
+**Baseline MILP** (CVXPY + HiGHS) : intègre un **binaire de complémentarité import/export**
+garantissant une formulation propre (pas d'aller-retour import↔export fictif). Le plan est rejoué
+dans l'env via `baselines/milp_dispatch.py` pour une comparaison à physique identique.
+
+**Env custom plutôt que pymgrid** : `envs/base_microgrid_env.py` réimplémente les fonctionnalités
+nécessaires de pymgrid tout en restant **totalement modifiable** (équations batterie, pertes, prix,
+observation, récompense). Le flux interne complet est documenté dans
+**[RL_communication-flow.md](./RL_communication-flow.md)**.
+
+---
+
+## 6. Données
+
+Pipeline : `data/raw/` (pyranomètre brut) → `data/clean/` (via `data/clean_meteo.py` +
+`data/clean_load*.py`, `Pyrano1Y_clean.csv` = année complète) → fenêtres découpées par
+`data/extract_pyrano_simu.py` vers `data/train/` (entraînement) et `data/simu/` (test/replay).
+La démarche complète (recettes de fenêtres par régime, régimes haute/basse) est dans
+**[SIMULATION.md](./SIMULATION.md)**.
+
+### ⚠️ Problème ouvert — encodage cyclique sin/cos
+Le nettoyage ajoute des paires (cos, sin) pour l'heure et le jour de l'année (casse les
+discontinuités du temps cyclique). En déploiement **LIVE**, rien ne garantit l'accès à ces paires
+pré-calculées. À tester expérimentalement dans les 4 configurations (avec/sans heures brutes
+normalisées × avec/sans sin/cos) pour mesurer la sensibilité réelle de l'agent.
+
+---
+
+## 7. État actuel & perspectives
 
 ### ✅ Implémenté
-- Agents **SAC** (principal), **DDPG / TD3 / PPO** via Stable-Baselines3
-- Environnement **Gymnasium custom** (`envs/base_microgrid_env.py`) en remplacement de pymgrid, totalement modifiable
-- Baseline **MILP** (CVXPY + HiGHS) + replay du plan (`baselines/milp_dispatch.py`), contrainte EDF no-grid-charging câblée MILP+RL
-- **Behavior Cloning** + ancre MILP persistante / AWAC, **reward shaping** PBRS (store-value, export-stock)
-- Métriques de **gap stratifié par saison** + outil de **re-scoring** sans réentraînement (`--rescore`)
-- Pipeline de données (`data/clean_meteo.py`) + jeux de simulation 4 cas (hiver/été × haute/basse saison)
-- Configuration des expériences par fichiers **YAML** + **infra de sweep HPC** (`cluster/`, cf. `cluster/README.md`)
-- Montages de validation overfit / prix fixes / feature de timing (exp21-23)
-- Scripts d'optimisation centralisés dans `scripts/rl/` et `scripts/milp/`
+- Agents **SAC** (principal), **DDPG / TD3 / PPO** (SB3) ; env **Gymnasium custom** modifiable
+- Baseline **MILP** (CVXPY + HiGHS) + replay, contrainte EDF *no-grid-charging* câblée MILP+RL
+- **Behavior Cloning** + ancre MILP / AWAC ; **reward shaping PBRS** (store-value + miroirs hold/charge/discharge)
+- Métriques de **gap stratifié par saison** (`gap_abs_eur`), `boundary_soc_credit`, **re-scoring** sans réentraînement
+- Pipeline de données + jeux de simulation par régime (été/hiver × haute/basse) + fenêtre combinée
+- **Validation overfit** (famille A) et **évaluation held-out train/test** (famille B, exp31)
+- **Infra de sweep HPC** (`cluster/`) + scripts de replay centralisés (`scripts/`)
 
 ### 🔜 À venir
-- **Rendements variables** (dépendant du SoC / de la puissance) et **coût par cycle** — pour corriger le comportement observé sur exp01 (cycles excessifs) et exp02 (batterie ignorée). Recherche bibliographique à mener à partir de Zotero.
-- **Étude de robustesse de l'environnement custom** vs pymgrid (cas-tests comparatifs)
-- Ajout de **plots de visualisation** comparables aux sorties MATLAB du EMS original
-- Tests de **robustesse des paires sin/cos** (voir section Données)
+- Réduire le résiduel « déployer trop tôt » hors-overfit (surtout hiver_haute)
+- **Rendements variables** (dépendant du SoC/de la puissance) et **coût par cycle** (vieillissement)
+- **Étude de robustesse** de l'env custom vs pymgrid
+- Test de la **feature sin/cos** en conditions LIVE (cf. §6)
+- Génération des **figures held-out** pour le rapport (`scripts/fig/`, à adapter d'exp22 vers exp31)
 
 ---
 
-## 7. VIBE CODING ALERT ⚠️
+## 8. VIBE CODING ⚠️
 
-Le code de ce projet a été **généré par Claude Code (Anthropic)**, mais il a été **exhaustivement vérifié à la main** : aucune ligne n'a été acceptée sans relecture. Les prompts utilisés pour la génération ont été construits minutieusement (itérations, contraintes architecturales, vérifications croisées) et sont disponibles dans **[prompts.md](./prompts.md)** pour reproductibilité et inspection.
+Le code a été **généré par Claude Code (Anthropic)** puis **relu et vérifié à la main** : aucune
+ligne acceptée sans relecture. Les prompts (itérations, contraintes architecturales, vérifications
+croisées) sont dans **[prompts.md](./prompts.md)** pour reproductibilité et inspection.
